@@ -1,4 +1,6 @@
-# PyWinUI
+# PyWinUI3
+
+本项目完全是ai许愿式编程瞎搞出来的，有什么问题欢迎来issues轰炸
 
 用 tkinter 的写法，渲染真正的 WinUI 3 界面。
 
