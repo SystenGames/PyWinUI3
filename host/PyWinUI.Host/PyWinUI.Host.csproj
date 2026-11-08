@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>PyWinUI.Host</RootNamespace>
+    <AssemblyName>PyWinUI.Host</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <UseWinUI>true</UseWinUI>
+
+    <!--
+      驱动 MRT 资源合并：把 Windows App SDK 的控件样式（generic.xaml 里的
+      AcrylicBackgroundFillColorDefaultBrush 等）合并进应用自己的 .pri。
+      没有它，unpackaged 下 XamlControlsResources 构造会抛「找不到资源」。
+    -->
+    <EnableMsixTooling>true</EnableMsixTooling>
+
+    <!-- 关键：不走 MSIX 打包，直接以裸 exe 运行，Python 才拉得起来 -->
+    <WindowsPackageType>None</WindowsPackageType>
+
+    <!-- 把 Windows App SDK 运行时复制进输出目录，不依赖系统预装的版本 -->
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+
+    <!-- 只自包含 WinAppSDK，.NET 运行时仍用系统的，避免输出目录膨胀到几百 MB -->
+    <SelfContained>false</SelfContained>
+
+    <!-- 自己写 Main，不让 XAML 编译器生成 -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2957" />
+  </ItemGroup>
+
+</Project>

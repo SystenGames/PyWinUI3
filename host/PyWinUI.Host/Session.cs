@@ -1,0 +1,421 @@
+using System.Text.Json.Nodes;
+using Microsoft.UI.Dispatching;
+using Microsoft.UI.Windowing;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Windows.Media.Playback;
+using PyWinUI.Host.Protocol;
+using PyWinUI.Host.Rendering;
+using PyWinUI.Host.Transport;
+
+namespace PyWinUI.Host;
+
+/// <summary>
+/// 会话协调者：串起传输层、协议解析和渲染器。
+///
+/// 线程模型是这个类最需要注意的地方：
+///
+/// - 读 stdin 会阻塞，绝不能占 UI 线程，所以放在后台线程
+/// - 所有 XAML 操作必须在 UI 线程，所以消息解析完要 DispatcherQueue 排队
+/// - 写 stdout 是线程安全的（StdioChannel 内部加锁），UI 线程直接写
+///
+/// 这套分工和 WinUI 自身的设计一致，也是它不会像进程内托管那样死锁的原因。
+/// </summary>
+internal sealed class Session
+{
+    private readonly Window _window;
+    private readonly DispatcherQueue _dispatcher;
+    private readonly StdioChannel _channel;
+    private readonly FormRenderer _renderer;
+
+    private long _rev;
+    private bool _handshaken;
+    private bool _closed;
+
+    public Session(Window window, DispatcherQueue dispatcher)
+    {
+        _window = window;
+        _dispatcher = dispatcher;
+        _channel = new StdioChannel();
+        _renderer = new FormRenderer(
+            window,
+            Emit,
+            message => HostLog.Write("[warn] " + message),
+            (code, message, nodeId) => Send(Outbound.Error(code, message, nodeId)));
+
+        _window.Closed += OnWindowClosed;
+    }
+
+    public void Start()
+    {
+        _channel.LineReceived += OnLineReceived;
+        _channel.Closed += OnInputClosed;
+        _channel.Start();
+        HostLog.Write("session started, waiting for hello");
+    }
+
+    // ==================================================================
+    // 入站
+    // ==================================================================
+
+    private void OnLineReceived(string line)
+    {
+        if (_closed)
+        {
+            return;
+        }
+
+        HostLog.Write("<< " + Truncate(line));
+
+        InboundMessage message;
+        try
+        {
+            message = Inbound.Parse(line);
+        }
+        catch (ProtocolException ex)
+        {
+            HostLog.Write($"[protocol] {ex.Code}: {ex.Message}");
+            Send(Outbound.Error(ex.Code, ex.Message, ex.NodeId));
+
+            if (ex.IsFatal)
+            {
+                _dispatcher.TryEnqueue(() => Shutdown(1));
+            }
+
+            return;
+        }
+
+        // 解析在后台线程完成，渲染必须回 UI 线程
+        _dispatcher.TryEnqueue(() => Handle(message));
+    }
+
+    private void Handle(InboundMessage message)
+    {
+        if (_closed)
+        {
+            return;
+        }
+
+        if (!_handshaken)
+        {
+            HandleHandshake(message);
+            return;
+        }
+
+        switch (message)
+        {
+            case RenderMessage render:
+                _rev = render.Rev;
+                // 窗口能力（最大化/最小化）由 ApplyWindowSpec 在成功落地窗口属性时一并交还，
+                // 渲染失败时窗口保持加载态的小尺寸——那里能最大化毫无意义。
+                _renderer.Render(render);
+                Send(Outbound.Ack(render.Rev));
+                break;
+
+            case PatchMessage patch:
+                _rev = patch.Rev;
+                _renderer.Apply(patch);
+                Send(Outbound.Ack(patch.Rev));
+                break;
+
+            case InvokeMessage invoke:
+                HandleInvoke(invoke);
+                break;
+
+            case DialogMessage dialog:
+                ShowDialog(dialog);
+                Send(Outbound.Ack(_rev));
+                break;
+
+            case CloseMessage close:
+                Shutdown(close.Code);
+                break;
+
+            case HelloMessage:
+                Send(Outbound.Error("bad-protocol", "重复的 hello 消息", null));
+                break;
+        }
+    }
+
+    private void HandleHandshake(InboundMessage message)
+    {
+        if (message is not HelloMessage hello)
+        {
+            HostLog.Write("first message is not hello, aborting");
+            Send(Outbound.Error("bad-protocol", "首条消息必须是 hello", null));
+            Shutdown(1);
+            return;
+        }
+
+        if (hello.Protocol != Wire.Version)
+        {
+            HostLog.Write($"protocol mismatch: client={hello.Protocol} host={Wire.Version}");
+            Send(Outbound.Error(
+                "version-mismatch",
+                $"协议版本不匹配：客户端 {hello.Protocol}，宿主 {Wire.Version}",
+                null));
+            Shutdown(1);
+            return;
+        }
+
+        _handshaken = true;
+        HostLog.Write($"handshake ok (client={hello.Client} pid={hello.Pid})");
+
+        Send(Outbound.Ready(Capabilities.DescribeOs(), Capabilities.Detect()));
+    }
+
+    private void HandleInvoke(InvokeMessage invoke)
+    {
+        if (!_renderer.TryGetElement(invoke.Id, out var element))
+        {
+            Send(Outbound.Error("unknown-node", $"invoke 的目标不存在: {invoke.Id}", invoke.Id));
+            return;
+        }
+
+        try
+        {
+            switch (invoke.Method)
+            {
+                case "focus":
+                    if (element is Control control)
+                    {
+                        control.Focus(FocusState.Programmatic);
+                    }
+                    else
+                    {
+                        element.Focus(FocusState.Programmatic);
+                    }
+
+                    break;
+
+                case "select_all":
+                    if (element is TextBox box)
+                    {
+                        box.SelectAll();
+                    }
+
+                    break;
+
+                case "scroll_to":
+                    var index = ValueParsers.AsInt(invoke.Args?["index"]) ?? 0;
+                    if (element is ListView list && list.Items.Count > index && index >= 0)
+                    {
+                        list.ScrollIntoView(list.Items[index]);
+                    }
+
+                    break;
+
+                case "play":
+                    if (element is MediaPlayerElement playMedia)
+                    {
+                        playMedia.MediaPlayer?.Play();
+                    }
+
+                    break;
+
+                case "pause":
+                    if (element is MediaPlayerElement pauseMedia)
+                    {
+                        pauseMedia.MediaPlayer?.Pause();
+                    }
+
+                    break;
+
+                case "stop":
+                    if (element is MediaPlayerElement stopMedia
+                        && stopMedia.MediaPlayer is { } stopPlayer)
+                    {
+                        // MediaPlayer 没有 Stop()，只能暂停后把播放位置归零
+                        stopPlayer.Pause();
+                        stopPlayer.PlaybackSession.Position = TimeSpan.Zero;
+                    }
+
+                    break;
+
+                case "seek":
+                    if (element is MediaPlayerElement seekMedia
+                        && seekMedia.MediaPlayer is { } seekPlayer)
+                    {
+                        var seconds = ValueParsers.AsDouble(invoke.Args?["seconds"]) ?? 0;
+                        seekPlayer.PlaybackSession.Position =
+                            TimeSpan.FromSeconds(Math.Max(0, seconds));
+                    }
+
+                    break;
+
+                default:
+                    Send(Outbound.Error(
+                        "bad-protocol",
+                        $"未知的 invoke 方法: {invoke.Method}",
+                        invoke.Id));
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Send(Outbound.Error("internal", $"invoke {invoke.Method} 失败: {ex.Message}", invoke.Id));
+        }
+    }
+
+    // ==================================================================
+    // 窗口装饰
+    // ==================================================================
+
+    // 加载态 -> 常规态的窗口装饰切换已并入 FormRenderer.ApplyWindowSpec：
+    // 那里能同时看到协议给的 resizable / minimizable / maximizable，
+    // 分两处设置会互相覆盖。
+
+    // ==================================================================
+    // 对话框
+    // ==================================================================
+
+    private bool _dialogOpen;
+
+    /// <summary>
+    /// 显示模态对话框。
+    ///
+    /// WinUI 限制同一时刻只能有一个 ContentDialog，所以这里用标志位挡住并发请求——
+    /// 不加这个判断，连续触发会抛「Only a single ContentDialog can be open at any time」。
+    /// </summary>
+    private async void ShowDialog(DialogMessage message)
+    {
+        if (_dialogOpen)
+        {
+            Send(Outbound.Error("busy", "已有对话框未关闭，本次请求被丢弃", null));
+            return;
+        }
+
+        var xamlRoot = _window.Content?.XamlRoot;
+        if (xamlRoot is null)
+        {
+            Send(Outbound.Error("internal", "窗口还没有内容，无法显示对话框", null));
+            return;
+        }
+
+        _dialogOpen = true;
+        try
+        {
+            var dialog = new ContentDialog
+            {
+                Title = string.IsNullOrEmpty(message.Title) ? "提示" : message.Title,
+                Content = message.Body,
+                CloseButtonText = "知道了",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = xamlRoot,
+            };
+
+            HostLog.Write($"[dialog] show: {message.Title} / {message.Body}");
+            await dialog.ShowAsync();
+            HostLog.Write("[dialog] closed");
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("dialog failed: " + ex.Message);
+            Send(Outbound.Error("internal", $"对话框显示失败: {ex.Message}", null));
+        }
+        finally
+        {
+            _dialogOpen = false;
+        }
+    }
+
+    // ==================================================================
+    // 出站
+    // ==================================================================
+
+    private void Emit(string nodeId, string eventName, JsonObject? data, bool echo)
+    {
+        if (_closed)
+        {
+            return;
+        }
+
+        Send(Outbound.Event(nodeId, eventName, _rev, data, echo));
+    }
+
+    private void Send(string line)
+    {
+        HostLog.Write(">> " + Truncate(line));
+        _channel.Send(line);
+    }
+
+    private static string Truncate(string text) =>
+        text.Length <= 500 ? text : text[..500] + $"…(+{text.Length - 500})";
+
+    // ==================================================================
+    // 关闭
+    // ==================================================================
+
+    private void OnInputClosed(string? error)
+    {
+        if (_closed)
+        {
+            return;
+        }
+
+        HostLog.Write(error is null
+            ? "stdin closed (python side exited)"
+            : $"stdin closed with error: {error}");
+
+        // Python 那边没了，界面留着也没意义
+        _dispatcher.TryEnqueue(() => Shutdown(0));
+    }
+
+    private void OnWindowClosed(object sender, WindowEventArgs args)
+    {
+        if (_closed)
+        {
+            return;
+        }
+
+        HostLog.Write("window closed by user");
+        _closed = true;
+        _channel.Send(Outbound.Bye(_exitCode));
+        _channel.Dispose();
+        Application.Current.Exit();
+    }
+
+    /// <summary>退出码。记在字段上，是因为关窗要经过 Closed 事件，那里拿不到局部变量。</summary>
+    private int _exitCode;
+
+    private void Shutdown(int code)
+    {
+        if (_closed)
+        {
+            return;
+        }
+
+        _exitCode = code;
+        HostLog.Write($"shutdown (code={code})");
+
+        // 先正常关窗口，让 closing 事件能发出去——Emit 会检查 _closed，
+        // 所以不能像以前那样先把 _closed 置位再退出。
+        try
+        {
+            _window.Close();
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("close window failed: " + ex.Message);
+        }
+
+        if (_closed)
+        {
+            // Closed 事件已经把收尾做完（正常用户关窗走的就是这条路）
+            return;
+        }
+
+        _closed = true;
+
+        try
+        {
+            _channel.Send(Outbound.Bye(code));
+        }
+        catch
+        {
+        }
+
+        _channel.Dispose();
+        Application.Current.Exit();
+    }
+}
