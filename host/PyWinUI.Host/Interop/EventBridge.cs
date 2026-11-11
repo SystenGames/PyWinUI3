@@ -214,6 +214,14 @@ internal sealed class EventBridge
                 BindPointer(element, nodeId, eventName, Raise);
                 break;
 
+            // WebView2 导航事件：协议没有「读回」通道，真实地址只能靠事件主动推给 Python。
+            // 只在真的订阅了这些事件时才挂，不为读地址白拉起 CoreWebView2。
+            case "navigationStarting":
+            case "navigationCompleted":
+            case "sourceChanged":
+                BindWebView2Navigation(element, nodeId, eventName, Raise);
+                break;
+
             // 这两个事件的订阅时机不在绑定阶段：menu 由 contextMenu 的菜单项自行回传，
             // imageFailed 跟着 BitmapImage 的加载走。这里认下名字，免得刷「未知事件」。
             case "menu":
@@ -372,6 +380,94 @@ internal sealed class EventBridge
                 {
                     ["error"] = e.ErrorMessage ?? "unknown",
                 });
+                break;
+        }
+    }
+
+    /// <summary>
+    /// WebView2 的导航事件。协议里 invoke 没有返回值，宿主没法被「问」当前网址，
+    /// 所以由这里主动把浏览器地址推回 Python，Python 侧记进 WebView2.current_url。
+    ///
+    /// sourceChanged 挂在 CoreWebView2 而不是 XAML 控件上：它连 history.pushState /
+    /// location.hash 这类没走 NavigationStarting 的地址变化也能覆盖。CoreWebView2 是
+    /// 异步初始化的，早了拿不到，所以要么直接挂、要么等 CoreWebView2Initialized。
+    /// </summary>
+    private static void BindWebView2Navigation(
+        FrameworkElement element,
+        string nodeId,
+        string eventName,
+        Action<string, JsonObject?> raise)
+    {
+        // 缺运行时时这个位置是灰色降级 Border，静默跳过：没有浏览器就没有地址可报。
+        if (element is not WebView2 web)
+        {
+            return;
+        }
+
+        // XAML 控件的事件在 UI 线程，但 CoreWebView2 的回调不保证。
+        // 统一调度回 UI 线程再 emit，避免跨线程碰控件和 _suppressed 集合。
+        void Post(JsonObject data)
+        {
+            var queue = web.DispatcherQueue;
+            if (queue is not null && !queue.HasThreadAccess)
+            {
+                queue.TryEnqueue(() => raise(eventName, data));
+            }
+            else
+            {
+                raise(eventName, data);
+            }
+        }
+
+        switch (eventName)
+        {
+            case "navigationStarting":
+                web.NavigationStarting += (_, e) => Post(new JsonObject
+                {
+                    ["url"] = e.Uri ?? "",
+                });
+                break;
+
+            case "navigationCompleted":
+                // 这个事件参数不带 Uri（NavigationStarting 才带），
+                // 地址从 CoreWebView2 取，回落再用 XAML 控件的 Source。
+                web.NavigationCompleted += (_, e) => Post(new JsonObject
+                {
+                    ["url"] = web.CoreWebView2?.Source ?? web.Source?.ToString() ?? "",
+                    ["isSuccess"] = e.IsSuccess,
+                    ["httpStatusCode"] = e.HttpStatusCode,
+                });
+                break;
+
+            case "sourceChanged":
+                void AttachCore()
+                {
+                    var core = web.CoreWebView2;
+                    if (core is null)
+                    {
+                        return;
+                    }
+
+                    // 补一次当前地址：初始化完成前发生的导航不会再有任何事件。
+                    // Core 刚起来时常是 about:blank，那不是用户要的网址，别覆盖掉。
+                    var initial = core.Source ?? "";
+                    if (!string.IsNullOrEmpty(initial) && initial != "about:blank")
+                    {
+                        Post(new JsonObject { ["url"] = initial });
+                    }
+                    core.SourceChanged += (_, _) =>
+                        Post(new JsonObject { ["url"] = core.Source ?? "" });
+                }
+
+                if (web.CoreWebView2 is not null)
+                {
+                    AttachCore();
+                }
+                else
+                {
+                    web.CoreWebView2Initialized += (_, _) => AttachCore();
+                }
+
                 break;
         }
     }

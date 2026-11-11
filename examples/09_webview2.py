@@ -55,13 +55,46 @@ def main() -> None:
         )
 
     bar = ui.Row(col, spacing=8)
-    web = ui.WebView2(col, source="https://www.example.com", height=400)
+    web = ui.WebView2(col, source="https://www.example.com", height=360)
 
     ui.Button(bar, "后退", command=web.go_back)
     ui.Button(bar, "前进", command=web.go_forward)
     ui.Button(bar, "刷新", command=web.reload)
     ui.Button(bar, "换到 Bing", command=lambda: web.navigate("https://www.bing.com"))
     ui.Button(bar, "换到 GitHub", command=lambda: web.navigate("https://github.com"))
+    ui.Button(
+        bar,
+        "HTML 字符串",
+        command=lambda: web.navigate_to_string(
+            "<!doctype html><html><body style='font-family:Segoe UI;margin:36px'>"
+            "<h1>来自 Python 的 HTML 字符串</h1>"
+            "<p>这类页面没有真实网址，current_url 会变成 about:blank。</p>"
+            "</body></html>"
+        ),
+    )
+
+    url_label = ui.Label(col, "当前网址：等待浏览器回报…", wrap=True, opacity=0.85)
+    status = ui.Label(col, "最近事件：—", wrap=True, opacity=0.6)
+
+    def on_navigated(e):
+        status.text = (
+            f"最近事件：navigationCompleted → {e.data.get('url')} "
+            f"（成功={e.data.get('isSuccess')}，状态码={e.data.get('httpStatusCode')}）"
+        )
+
+    web.on_navigate(on_navigated)
+
+    # 定期读 current_url：在网页里点链接 / 被重定向后，它会和 source 不一样
+    stopped = {"v": False}
+
+    def refresh():
+        if stopped["v"]:
+            return
+        url_label.text = f"当前网址：{web.current_url or '（尚无）'}"
+        win.after(300, refresh)
+
+    win.on_close(lambda _e: stopped.__setitem__("v", True))
+    refresh()
 
     ui.Label(
         col,

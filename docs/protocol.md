@@ -153,7 +153,9 @@ Python                          Host
 
 支持：`focus`、`select_all`、`scroll_to`（`args: {"index": 0}`）、
 `play` / `pause` / `stop` / `seek`（仅 `Media`，`seek` 用 `args: {"seconds": 12.5}`）、
-`navigate`（仅 `WebView2`，`args: {"url": "https://..."}`）/ `reload` / `go_back` / `go_forward`。
+`navigate`（仅 `WebView2`，`args: {"url": "https://..."}`）/ `reload` / `go_back` / `go_forward` /
+`navigate_to_string`（仅 `WebView2`，`args: {"html": "<h1>Hi</h1>"}`，会等
+`CoreWebView2` 初始化完成再调用，见 3.5.4）。
 
 #### `dialog` — 弹出模态对话框
 
@@ -476,8 +478,40 @@ Python 侧据此抑制双向绑定回环。
 
 边界：本节只覆盖「运行时根本没装」。运行时存在但初始化失败（安装损坏、
 权限问题）目前只在日志里留下 WebView2 的异常，该区域显示为空白，
-暂不自动替换成降级页。`WebView2` 也暂不提供导航完成事件与
-`NavigateToString`（本地 HTML 字符串）。
+暂不自动替换成降级页。
+
+#### 3.5.4 `WebView2` 的导航事件与当前网址
+
+`invoke` 没有返回值，Python 不能「问」宿主当前网址，所以由宿主主动推送。
+`WebView2` 节点**订阅以下事件后**宿主才去挂对应监听器——不订阅就不拉起
+`CoreWebView2`，避免为了读地址白白初始化一个浏览器。
+
+| 事件 | 来源 | `data` |
+| --- | --- | --- |
+| `navigationStarting` | `WebView2.NavigationStarting` | `{ "url": "https://..." }` |
+| `navigationCompleted` | `WebView2.NavigationCompleted` | `{ "url": "...", "isSuccess": true, "httpStatusCode": 200 }` |
+| `sourceChanged` | `CoreWebView2.SourceChanged` | `{ "url": "..." }` |
+
+`navigationCompleted` 的事件参数不带 URI，地址从 `CoreWebView2.Source` 取
+（回落用 `WebView2.Source`）；`sourceChanged` 覆盖页面内 JS 改地址
+（`location.hash` / `history.pushState`）这类没走 `NavigationStarting` 的变化。
+`CoreWebView2` 是异步初始化的，订阅会等 `CoreWebView2Initialized`，并在就绪时
+补报一次当前地址（`about:blank` 不算，跳过）。Core 回调不保证在 UI 线程，
+事件统一经 `DispatcherQueue` 调度后再 `emit`。
+
+Python 侧 `WebView2` 构造时常驻订阅 `sourceChanged`，把收到的 `url` 记进
+`current_url`；同步写在 `_sync_from_event` 而不是用户回调里，所以用户重新
+`bind("sourceChanged", ...)` 覆盖掉内部空回调也不会影响 `current_url`。
+`source` 是最后一次写入的目标，`current_url` 是浏览器回报的实际地址，
+页面内跳转或服务端重定向后两者会不同。
+
+降级占位是 `Border`，三个事件都静默跳过、不报错；此时没有浏览器，
+`current_url` 保持最后一次设置的 `source`。
+
+`navigate_to_string` 先 `await EnsureCoreWebView2Async()` 再调
+`NavigateToString(html)`：冷启动时 Core 还没好，直接调会抛
+「valid CoreWebView2 is not present」。这类页面没有真实地址，
+`current_url` 通常是 `about:blank`。
 
 ### 3.6 值类型约定
 
@@ -512,6 +546,9 @@ Python 侧据此抑制双向绑定回环。
 | `pointerEntered` / `pointerExited` | 任意节点                              | `{}`，鼠标进出元素边界          |
 | `pointerPressed`   | 任意节点                                               | `{}`，按下（含子元素冒泡）              |
 | `imageFailed`      | Image                                              | `{ "error": "...", "src": "..." }` |
+| `navigationStarting` | WebView2（订阅后才挂监听）                          | `{ "url": "..." }`                  |
+| `navigationCompleted` | WebView2                                         | `{ "url": "...", "isSuccess": true, "httpStatusCode": 200 }` |
+| `sourceChanged`    | WebView2                                           | `{ "url": "..." }`，含 JS 改地址，见 3.5.4   |
 | `closing`          | Window                                             | `{}`，关闭前触发，首版不支持取消              |
 | `sizeChanged`      | Window                                             | `{ "width": 640.0, "height": 480.0 }` |
 

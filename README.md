@@ -352,7 +352,22 @@ web.navigate("https://www.bing.com")   # 等价于 web.source = "..."
 web.reload()
 web.go_back()
 web.go_forward()
+
+print(web.source)        # 你最后一次写进去的目标地址
+print(web.current_url)   # 浏览器当前的真实地址（含页面内跳转、重定向）
+web.on_navigate(lambda e: print(e.data["url"], e.data["isSuccess"]))
+web.navigate_to_string("<h1>Hello</h1>")   # 直接渲染一段 HTML
 ```
+
+`source` 和 `current_url` 不是一回事：前者是你设的目标，后者是宿主从浏览器
+导航事件里回报的**实际地址**。页面里点链接、服务端重定向、JS 改 `location.hash`
+之后两者会不同。宿主订阅了 `navigationStarting` / `navigationCompleted` /
+`sourceChanged` 三类事件；`web.on_navigate(fn)` 是绑 `navigationCompleted` 的快捷方式，
+`data` 里还有 `isSuccess` 和 `httpStatusCode`。`current_url` 的同步不占用用户回调，
+你照样可以 `web.bind("sourceChanged", fn)` 而不会把它弄坏。
+
+`navigate_to_string()` 直接渲染 HTML 字符串，不需要文件或本地服务器；这类页面
+没有真实地址，`current_url` 通常是 `about:blank`。
 
 控件由 WinUI 3 的 `WebView2` 承载，背后是系统安装的 Edge WebView2 Runtime；
 本项目**不打包、也不会替你安装**运行时。宿主在创建节点时探测：
@@ -363,7 +378,8 @@ web.go_forward()
   此时该控件的方法调用是安全的空操作。
 
 不想卸载运行时也能验证降级：启动前设 `PYWINUI3_WEBVIEW2_FALLBACK=1`，
-或直接跑 `examples/09_webview2.py`。探测规则见 [docs/protocol.md](docs/protocol.md) 3.5.3。
+或直接跑 `examples/09_webview2.py`。探测规则见 [docs/protocol.md](docs/protocol.md) 3.5.3，
+导航事件与地址回传见 3.5.4。
 
 ### 6.4 可收缩侧栏与宽度动画
 
@@ -412,7 +428,7 @@ panel.animate_width(200, steps=12, interval=24)
 | `examples/06_buttons.py` | ToggleButton / SplitButton / RepeatButton |
 | `examples/07_sidebar.py` | Grid 布局 + 可折叠 ListBox 侧边栏（20 步宽度动画） |
 | `examples/08_load_fail.py` | 加载 → 失败：加载圈 0.5 秒保底 + 失败错误界面 |
-| `examples/09_webview2.py` | WebView2 网页视图 + 缺运行时时的灰色降级页 |
+| `examples/09_webview2.py` | WebView2 网页视图：当前网址 / 导航事件 / HTML 字符串 / 缺运行时的灰色降级页 |
 
 `02_controls.py` 是肉眼验收用的，`03_live.py` 用来确认「实时」这件事：全程没有手动刷新调用。
 
@@ -431,8 +447,20 @@ panel.animate_width(200, steps=12, interval=24)
 - **关闭事件不可取消**。`closing` 只是通知，拦不住关窗；需要「确认退出」请在界面里做。
 - **启动至少 0.5 秒**。加载圈有保底显示时间，否则在快机器上只闪一两帧，看起来像界面抖了一下。
 - **回调在主线程执行**。回调里阻塞会卡住整个 UI，和 tkinter 行为一致。
+- **协议没有「读回」通道**。`invoke` 是单向命令、没有返回值，控件状态只能靠事件
+  被动同步。因此「随时想读一个值」的能力暂时做不到，例如 `ActualWidth/Height`、
+  窗口当前是否最大化、文本框选区、媒体缓冲进度、`can_go_back`；要补需要先给协议
+  加 query/result 消息类型。`WebView2.current_url` 是靠导航事件推回来的，页面加载
+  完成前会短暂落后。
+- **事件面只覆盖常用交互**。键盘按键、`Loaded`/`Unloaded`、拖放、窗口激活与
+  最大化/最小化状态变化、`TextChanging` 等尚未接入；已支持的事件清单见
+  [docs/protocol.md](docs/protocol.md) 第 4 章。
+- **控件类型是子集**。WinUI 3 的 `NumberBox` / `DatePicker` / `TimePicker` /
+  `AutoSuggestBox` / `TreeView` / `TabView` / `NavigationView` / `InfoBar` /
+  `Expander` / `GridView` 等尚未接入，目前只有第 4 章表里那 23 种节点。
 - **WebView2 依赖系统运行时**。只覆盖「运行时没装」这一种失败：运行时存在但初始化
-  失败（安装损坏）时该区域仍可能空白；也暂不支持本地 HTML 字符串和导航完成事件。
+  失败（安装损坏）时该区域仍可能空白。`navigate_to_string()` 的页面没有真实地址，
+  也不支持执行 JS / 网页向 Python 发消息。
 
 ---
 

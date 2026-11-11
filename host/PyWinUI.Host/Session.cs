@@ -255,6 +255,16 @@ internal sealed class Session
 
                     break;
 
+                case "navigate_to_string":
+                    if (element is WebView2 htmlWeb
+                        && ValueParsers.AsString(invoke.Args?["html"]) is { } html)
+                    {
+                        // 冷启动时 CoreWebView2 可能还没好，直接调会抛异常，见下方 helper
+                        _ = NavigateToStringAsync(htmlWeb, html, invoke.Id);
+                    }
+
+                    break;
+
                 case "reload":
                     if (element is WebView2 reloadWeb)
                     {
@@ -290,6 +300,29 @@ internal sealed class Session
         catch (Exception ex)
         {
             Send(Outbound.Error("internal", $"invoke {invoke.Method} 失败: {ex.Message}", invoke.Id));
+        }
+    }
+
+    /// <summary>
+    /// NavigateToString 要求 CoreWebView2 已经就绪。控件刚建好、Runtime 冷启动时
+    /// Core 还在异步初始化，此时直接调会抛「valid CoreWebView2 is not present」。
+    /// HandleInvoke 本身跑在 UI 线程，await 会把控制权交回消息泵，不会死锁。
+    /// </summary>
+    private async Task NavigateToStringAsync(WebView2 web, string html, string? nodeId)
+    {
+        try
+        {
+            if (web.CoreWebView2 is null)
+            {
+                await web.EnsureCoreWebView2Async();
+            }
+
+            web.NavigateToString(html);
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("[webview2] NavigateToString failed: " + ex.Message);
+            Send(Outbound.Error("internal", $"navigate_to_string 失败: {ex.Message}", nodeId));
         }
     }
 

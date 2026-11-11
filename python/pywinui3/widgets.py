@@ -1084,21 +1084,43 @@ class WebView2(Widget):
 
         web = ui.WebView2(root, source="https://www.example.com", height=360)
         web.navigate("https://www.bing.com")
+        web.on_navigate(lambda e: print("已到", e.data["url"]))
+        print(web.current_url)          # 浏览器里的真实地址
         web.reload()
         web.go_back()
 
     ``source`` 必须是绝对 URL，``https://`` / ``file:///`` / ``http://localhost``
-    都可以。想强制走降级占位做演示，启动 Python 前设环境变量
-    ``PYWINUI3_WEBVIEW2_FALLBACK=1``。
+    都可以；``navigate_to_string(html)`` 则直接渲染一段 HTML 字符串。
 
-    已知限制：暂只支持 URL 导航，没有 ``NavigateToString``（本地 HTML 字符串）
-    和导航完成事件；这两者需要等 WebView2 Core 初始化完成，后续再补。
+    ``source`` 是**你最后一次写进去的目标**，``current_url`` 是**浏览器回报的
+    实际地址**——页面里点链接、服务端重定向、JS 改 ``location.hash`` 之后两者会不同。
+    缺运行时走降级页时不会有地址事件回报，``current_url`` 保持最后一次设置的值。
+
+    想强制走降级占位做演示，启动 Python 前设环境变量
+    ``PYWINUI3_WEBVIEW2_FALLBACK=1``。
     """
 
     _type = "WebView2"
+    _URL_EVENTS = frozenset(
+        {"navigationStarting", "navigationCompleted", "sourceChanged"}
+    )
 
     def __init__(self, master: Any, source: str = "", **kwargs: Any):
         super().__init__(master, source=source, **kwargs)
+        self._current_url = str(source)
+
+        # 常驻订阅 sourceChanged：宿主看到这个事件名才会去挂 CoreWebView2 的地址监听。
+        # 用空回调占住事件名，真正的同步写在 _sync_from_event 里，所以用户之后
+        # bind("sourceChanged", ...) 覆盖掉空回调也不会影响 current_url。
+        self.bind("sourceChanged", lambda _event: None)
+
+    def _sync_from_event(self, event: Any) -> None:
+        # 导航事件在 echo 抑制期间也可能到达，所以同步放在这里而不是 _on_event。
+        if event.name in self._URL_EVENTS:
+            url = event.data.get("url")
+            if isinstance(url, str):
+                self._current_url = url
+        super()._sync_from_event(event)
 
     @property
     def source(self) -> str:
@@ -1106,11 +1128,28 @@ class WebView2(Widget):
 
     @source.setter
     def source(self, url: str) -> None:
+        self._current_url = str(url)
         self.configure(source=str(url))
+
+    @property
+    def current_url(self) -> str:
+        """浏览器当前的真实地址（含页面内跳转与重定向），由宿主导航事件回报。"""
+        return self._current_url
+
+    def on_navigate(self, handler: Callable[..., Any]) -> str:
+        """导航完成时回调；``Event.data`` 含 ``url`` / ``isSuccess`` / ``httpStatusCode``。"""
+        return self.bind("navigationCompleted", handler)
 
     def navigate(self, url: str) -> None:
         """导航到绝对 URL，等价于 ``web.source = url``。"""
         self.source = str(url)
+
+    def navigate_to_string(self, html: str) -> None:
+        """直接渲染一段 HTML 字符串，不需要文件或本地服务器。
+
+        地址栏概念在这类页面上不成立，宿主回报的地址通常是空串。
+        """
+        self._app._send_invoke(self._id, "navigate_to_string", {"html": str(html)})
 
     def reload(self) -> None:
         """重新加载当前页。"""
