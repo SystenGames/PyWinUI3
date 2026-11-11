@@ -9,6 +9,7 @@ Python 只描述控件树，一个独立的 C# WinUI 3 进程负责真正画窗�
 - **平台**：Windows 10 19041 (2004) 及以上
 - **Python**：3.10+，仅用标准库，无第三方依赖
 - **协议**：[docs/protocol.md](docs/protocol.md) 是权威定义
+- **规模**：56 种控件类型、query/result 双向读回、键盘/焦点/拖放/窗口状态事件
 - **版本 / 许可**：0.1.0 · GPL-3.0-only
 
 ```python
@@ -144,7 +145,7 @@ tests/                    单测 + 两个端到端 smoke
 | `Scroll` | 纵向滚动区，**必须给 `height`**（或放进 Grid 的 `"*"` 行） |
 | `Frame` | `Column` 的别名，照顾 tkinter 习惯 |
 
-**控件**
+**基础控件**
 
 | 分组 | 类 |
 |---|---|
@@ -153,6 +154,15 @@ tests/                    单测 + 两个端到端 smoke
 | 列表 / 选择 | `ComboBox` `ListBox` `Slider` |
 | 进度 | `ProgressBar` `ProgressRing` |
 | 内容 | `Image` `Media` `WebView2` `Separator` |
+
+**扩展控件**（共 33 种，都是 WinUI 3 / Windows App SDK 1.8 内置类型）
+
+| 分组 | 类 |
+|---|---|
+| 表单输入 | `NumberBox` `PasswordBox` `RichTextBlock` `RichEditBox` `AutoSuggestBox` `DatePicker` `TimePicker` `CalendarDatePicker` `CalendarView` `RatingControl` `ColorPicker` |
+| 按钮 / 头像 | `DropDownButton` `ToggleSplitButton` `PersonPicture` |
+| 数据 / 导航 | `GridView` `FlipView` `Pivot` `TabView` `TreeView` `NavigationView` `MenuBar` `CommandBar` `BreadcrumbBar` `ItemsView` `RadioButtons` `SelectorBar` |
+| 信息 / 容器 | `InfoBar` `Expander` `BorderBox` `Viewbox` `RelativePanel` `TwoPaneView` `RefreshContainer` |
 
 **变量与工具**：`StringVar` `IntVar` `DoubleVar` `BooleanVar`、`Event`、`dialog()`、
 `PROTOCOL_VERSION`、各异常类。`Widget` 是所有控件的基类。
@@ -225,6 +235,57 @@ ui.dialog("控件事件", "Button 被点击了")
 ```
 
 `dialog()` 是模态的，会阻塞窗口交互，适合演示和调试；生产界面请用界面内的状态文字。
+第四个参数 `kind` 可选 `info` / `warn` / `error` / `success`，图标、颜色和按钮文字都不同。
+
+### 5.4 读取运行时状态
+
+界面的「设定值」和「真实状态」不是一回事：`width=200` 是设定值，
+布局完成后可能只有 184；`web.source` 是你写进去的目标，浏览器里的地址可能已经跳走。
+`query()` 直接问宿主：
+
+```python
+btn = ui.Button(win, "确定")
+
+print(btn.actual_width, btn.actual_height)   # 真实尺寸，读前会强制完成布局
+print(btn.is_loaded, btn.is_focused, btn.control_type)
+print(btn.query("text"))                     # 任意键都能读，见下
+
+print(win.state, win.is_maximized, win.is_active)
+print(win.window_bounds)                     # {"x","y","width","height"}
+```
+
+常用键：`actualWidth` / `bounds` / `isLoaded` / `isVisible` / `isEnabled` /
+`text` / `value` / `checked` / `selectedIndex` / `selectedItems` /
+`selectionStart` / `selectionLength` / `selectedText` / `itemCount` /
+`date` / `time` / `color` / `currentUrl` / `canGoBack` / `canGoForward` /
+`position` / `duration` / `isPlaying` / `verticalOffset` / `controlType` / `dpiScale`
+（完整清单见 [docs/protocol.md](docs/protocol.md) 3.7）。
+
+各控件也封装了常用读取：`entry.selection`、`entry.selected_text`、
+`web.can_go_back`、`web.browser_url`、`media.duration`、`media.is_playing`、
+`scroll.vertical_offset`、`list.selected_item`。
+
+窗口动作和状态事件：
+
+```python
+win.maximize(); win.restore(); win.minimize(); win.activate()
+win.on_state_changed(lambda e: print(e.data["state"]))
+win.on_activate(lambda e: print("焦点", e.data["active"]))
+```
+
+`query()` 是**同步**的（默认 2 秒超时），会阻塞主线程直到宿主回 `result`。
+等待期间到达的事件不会丢，会暂存到内部队列、下一轮事件循环照常派发，
+所以在回调里调用也安全。读不到值会抛 `UiError`，不会假装读到 `None`。
+
+新事件面也一并补齐了：键盘、焦点、加载、尺寸、拖放、指针：
+
+```python
+entry.on_key_down(lambda e: print(e.data["key"], e.data["ctrl"]))
+entry.on_loaded(lambda e: print("布局完成", e.data["width"]))
+entry.on_got_focus(lambda: print("聚焦"))
+entry.enable_drop()
+entry.on_drop(lambda e: print("放下了"))
+```
 
 ---
 
@@ -414,6 +475,67 @@ panel.animate_width(56)                       # 20 步缓出到 56
 panel.animate_width(200, steps=12, interval=24)
 ```
 
+### 6.5 扩展控件
+
+第 4 章列了 33 个扩展控件，用法和基础控件完全一致——构造传属性、
+赋值发 patch、`bind()` 挂事件、`query()` 读状态。几组典型写法：
+
+```python
+# 表单输入：数值、日期、评分、颜色、建议列表
+num = ui.NumberBox(col, value=42, min=0, max=100, step_frequency=2, header="数量")
+num.bind("change", lambda e: print(e.data["value"]))
+
+ui.DatePicker(col, date="2026-11-11", header="开始日期")
+ui.RatingControl(col, value=4)
+ui.ColorPicker(col, color="#FF0078D4")
+
+suggest = ui.AutoSuggestBox(col, items=["Alpha", "Beta", "Gamma"], placeholder="搜索")
+suggest.bind("querySubmitted", lambda e: print("提交", e.data["text"]))
+```
+
+```python
+# 数据 / 导航：多选网格、树、原生导航侧栏
+grid_view = ui.GridView(col, items=["一", "二", "三"],
+                       selection_mode="multiple", height=200)
+grid_view.bind("itemClick", lambda e: print(e.data["value"]))
+print(grid_view.selected_items)     # 所有选中项，问宿主要
+
+ui.TreeView(col, items=[{"label": "根", "children": ["子1", "子2"]}], height=220)
+ui.NavigationView(col, items=["首页", "设置"], pane_display_mode="left")
+```
+
+`TreeView` 的 `items` 用 `{"label": ..., "children": [...]}` 表达层级；
+`MenuBar` / `CommandBar` 的条目点击绑在父控件上，事件名是 `click`，
+用 `e.data["index"]` 区分点的是哪一项。
+
+```python
+# 信息 / 容器：提示条、折叠面板、带背景的盒子
+info = ui.InfoBar(col, title="成功", message="已保存", severity="success")
+info.hide()
+
+exp = ui.Expander(col, header="高级选项", is_expanded=True)
+ui.Checkbox(exp, "启用实验特性")
+
+box = ui.BorderBox(col, background="#FFF0F0F0", padding=12)
+ui.Label(box, "BorderBox 里的子控件")
+```
+
+`BorderBox` / `Viewbox` / `Expander` / `NavigationView` / `TwoPaneView` /
+`RefreshContainer` 都能直接放子控件，和 `Column` 一样。
+`RelativePanel` 也开放了容器能力，但 WinUI 的附加对齐属性
+（`AlignLeftWithPanel` 等）暂未映射，见第 8 章。
+
+输入控件的增强能力：
+
+```python
+entry = ui.Entry(col, text="abcdef")
+entry.select_range(1, 3)
+print(entry.selection, entry.selected_text)
+entry.copy(); entry.clear(); entry.paste()
+entry.set_spellcheck(False)
+entry.configure(accepts_return=True, is_spell_check_enabled=False)
+```
+
 ---
 
 ## 7. 示例
@@ -429,6 +551,7 @@ panel.animate_width(200, steps=12, interval=24)
 | `examples/07_sidebar.py` | Grid 布局 + 可折叠 ListBox 侧边栏（20 步宽度动画） |
 | `examples/08_load_fail.py` | 加载 → 失败：加载圈 0.5 秒保底 + 失败错误界面 |
 | `examples/09_webview2.py` | WebView2 网页视图：当前网址 / 导航事件 / HTML 字符串 / 缺运行时的灰色降级页 |
+| `examples/10_extended_controls.py` | 33 个扩展控件 + query 读回 + 键盘/焦点/窗口状态事件 |
 
 `02_controls.py` 是肉眼验收用的，`03_live.py` 用来确认「实时」这件事：全程没有手动刷新调用。
 
@@ -447,20 +570,29 @@ panel.animate_width(200, steps=12, interval=24)
 - **关闭事件不可取消**。`closing` 只是通知，拦不住关窗；需要「确认退出」请在界面里做。
 - **启动至少 0.5 秒**。加载圈有保底显示时间，否则在快机器上只闪一两帧，看起来像界面抖了一下。
 - **回调在主线程执行**。回调里阻塞会卡住整个 UI，和 tkinter 行为一致。
-- **协议没有「读回」通道**。`invoke` 是单向命令、没有返回值，控件状态只能靠事件
-  被动同步。因此「随时想读一个值」的能力暂时做不到，例如 `ActualWidth/Height`、
-  窗口当前是否最大化、文本框选区、媒体缓冲进度、`can_go_back`；要补需要先给协议
-  加 query/result 消息类型。`WebView2.current_url` 是靠导航事件推回来的，页面加载
-  完成前会短暂落后。
-- **事件面只覆盖常用交互**。键盘按键、`Loaded`/`Unloaded`、拖放、窗口激活与
-  最大化/最小化状态变化、`TextChanging` 等尚未接入；已支持的事件清单见
-  [docs/protocol.md](docs/protocol.md) 第 4 章。
-- **控件类型是子集**。WinUI 3 的 `NumberBox` / `DatePicker` / `TimePicker` /
-  `AutoSuggestBox` / `TreeView` / `TabView` / `NavigationView` / `InfoBar` /
-  `Expander` / `GridView` 等尚未接入，目前只有第 4 章表里那 23 种节点。
+- **读回是同步阻塞的**。`query()` 默认等 2 秒，在主线程上阻塞；回调里连续读几百次
+  会明显卡顿。等待期间的事件不丢，但定时器会顺延。读几何值时宿主会强制
+  `UpdateLayout()`，控件特别多时单次读取可能较慢。
+- **窗口状态有事件顺序问题**。`sizeChanged` 比 presenter 状态更新早，所以在
+  `on_resize()` 回调里读 `win.state` 可能还是旧值；要精确判断请在
+  `on_state_changed()` 里读，或在 `maximize()` 之后单独 `query()`。
+- **拖放只回报「发生了」**。`drop` 等事件给出 `{accepted}`，不解析
+  `DataView` 里的文件/文本内容，也没有 `DragStarting`。
+- **富文本目前是纯文本**。`RichTextBlock` / `RichEditBox` 只读写一段纯文字，
+  没有 `Block` / `Run` 的样式、超链接、图片内联接口。
+- **`RelativePanel` 只有容器能力**。WinUI 的 `AlignLeftWithPanel` / `AlignRightWith`
+  等附加属性未映射到协议，子节点目前在面板里按默认位置叠放；需要精确布局请用 `Grid`。
+- **动态条目不能塞子控件**。`TreeView` / `MenuBar` / `CommandBar` / `TabView` /
+  `ItemsView` / `BreadcrumbBar` 的条目由宿主按字符串生成，点击靠
+  `e.data["index"]` / `value` 区分，不能在条目里放自定义 UI。
+- **`CalendarView` 多选只读第一个日期**，`selectedDatesChanged` 回报单值。
+  `ItemsView` 用默认模板显示字符串，复杂 ItemTemplate 未开放。
+- **WinUI 3 没有内置 `DataGrid` 和 `InkCanvas`**，因此没有对应控件；
+  前者可以用 `GridView` / `ItemsView` 近似，后者需要自己接 `SwapChainPanel` + DirectX。
 - **WebView2 依赖系统运行时**。只覆盖「运行时没装」这一种失败：运行时存在但初始化
-  失败（安装损坏）时该区域仍可能空白。`navigate_to_string()` 的页面没有真实地址，
-  也不支持执行 JS / 网页向 Python 发消息。
+  失败（安装损坏）时该区域仍可能空白。`navigate_to_string()` 的页面没有真实地址；
+  `execute_script()` 的结果通过 `scriptResult` 事件回推，但网页仍不能主动向 Python
+  发消息（未开放 `WebMessageReceived`）。
 
 ---
 
@@ -482,8 +614,15 @@ python tests/smoke_events.py
 > 在构造时会抛「Cannot find a resource with the given key」，然后进程以
 > `0xC000027B`（stowed exception）直接退出。纯代码工程走不通这条路。
 
-改协议时请同步 `docs/protocol.md`、C# 的 `Protocol/` 与 `PropertyApplier.cs`、
-Python 的 `protocol.py` 和 `widgets.py`，再跑一遍 smoke。
+改协议时请同步 `docs/protocol.md`、C# 的 `Protocol/`、`PropertyApplier.cs` /
+`ExtendedProperties.cs`、`EventBridge.cs` / `ExtendedEvents.cs`、`Session.cs`，
+Python 的 `protocol.py`、`app.py`、`widgets.py` / `extended.py`，再跑一遍单测和 smoke。
+`tests/test_extended.py` 覆盖新增控件、query 消息形状与事件快捷绑定，不需要宿主进程。
+
+扩展能力的实现刻意按「工厂 / 属性 / 事件 / 命令 / 读回」拆成五个独立文件
+（`ExtendedControls.cs`、`ExtendedProperties.cs`、`ExtendedEvents.cs`、
+`ExtendedInvoke.cs`、`QueryExecutor.cs`），再通过各主 switch 的 `default` 或
+属性循环前置调用接进来；基础控件的既有分支基本没动，回归面更小。
 
 ---
 

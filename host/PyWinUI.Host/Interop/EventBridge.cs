@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -107,6 +108,35 @@ internal sealed class EventBridge
                         }, false);
                     break;
 
+                case "windowActivated":
+                    window.Activated += (_, e) =>
+                        _emit(nodeId, "windowActivated", new JsonObject
+                        {
+                            ["active"] = e.WindowActivationState != WindowActivationState.Deactivated,
+                        }, false);
+                    break;
+
+                case "windowStateChanged":
+                    // OverlappedPresenter 没有 StateChanged 事件。最大化/最小化
+                    // 一定伴随尺寸变化，所以在 SizeChanged 里比较 presenter 状态，
+                    // 只在状态真的改变时发一条，拖拽窗口不会刷屏。
+                    var lastState = WindowStateOf(window);
+                    window.SizeChanged += (_, _) =>
+                    {
+                        var current = WindowStateOf(window);
+                        if (current == lastState)
+                        {
+                            return;
+                        }
+
+                        lastState = current;
+                        _emit(nodeId, "windowStateChanged", new JsonObject
+                        {
+                            ["state"] = current,
+                        }, false);
+                    };
+                    break;
+
                 default:
                     _warn($"节点 {nodeId}: 窗口没有事件 \"{eventName}\"");
                     break;
@@ -117,6 +147,16 @@ internal sealed class EventBridge
             _warn($"节点 {nodeId}: 窗口事件 \"{eventName}\" 绑定失败: {ex.Message}");
         }
     }
+
+    private static string WindowStateOf(Window window) =>
+        window.AppWindow.Presenter is OverlappedPresenter presenter
+            ? presenter.State switch
+            {
+                OverlappedPresenterState.Maximized => "maximized",
+                OverlappedPresenterState.Minimized => "minimized",
+                _ => "normal",
+            }
+            : "normal";
 
     private void BindOne(FrameworkElement element, string nodeId, string eventName)
     {
@@ -149,7 +189,10 @@ internal sealed class EventBridge
                         split.Click += (_, _) => Raise("click", new JsonObject());
                         break;
                     default:
-                        _warn($"节点 {nodeId}: {element.GetType().Name} 没有 click 事件");
+                        if (!ExtendedEvents.TryBindClick(element, Raise))
+                        {
+                            _warn($"节点 {nodeId}: {element.GetType().Name} 没有 click 事件");
+                        }
                         break;
                 }
 
@@ -160,39 +203,55 @@ internal sealed class EventBridge
                 break;
 
             case "submit":
-                if (element is TextBox submitBox)
+                // Enter 提交：TextBox 和 PasswordBox 是两套完全无关的类型，
+                // 以前只认 TextBox，导致 Entry(password=True) 的 submit 永远不触发。
+                switch (element)
                 {
-                    submitBox.KeyDown += (_, e) =>
-                    {
-                        if (e.Key == VirtualKey.Enter)
+                    case TextBox submitBox:
+                        submitBox.KeyDown += (_, e) =>
                         {
-                            Raise("submit", new JsonObject { ["text"] = submitBox.Text });
-                        }
-                    };
-                }
-                else
-                {
-                    _warn($"节点 {nodeId}: {element.GetType().Name} 没有 submit 事件");
+                            if (e.Key == VirtualKey.Enter)
+                            {
+                                Raise("submit", new JsonObject { ["text"] = submitBox.Text });
+                            }
+                        };
+                        break;
+
+                    case PasswordBox submitPassword:
+                        submitPassword.KeyDown += (_, e) =>
+                        {
+                            if (e.Key == VirtualKey.Enter)
+                            {
+                                Raise("submit", new JsonObject { ["text"] = submitPassword.Password });
+                            }
+                        };
+                        break;
+
+                    case AutoSuggestBox submitSuggest:
+                        submitSuggest.QuerySubmitted += (_, e) => Raise("submit", new JsonObject
+                        {
+                            ["text"] = e.QueryText,
+                        });
+                        break;
+
+                    default:
+                        _warn($"节点 {nodeId}: {element.GetType().Name} 没有 submit 事件");
+                        break;
                 }
 
                 break;
 
             case "focus":
             case "blur":
-                if (element is Control focusControl)
+                // GotFocus / LostFocus 在 UIElement 上就有，不限于 Control。
+                // 用 FrameworkElement 兜住 Border、TextBlock 这类也能拿到焦点的元素。
+                if (eventName == "focus")
                 {
-                    if (eventName == "focus")
-                    {
-                        focusControl.GotFocus += (_, _) => Raise("focus", new JsonObject());
-                    }
-                    else
-                    {
-                        focusControl.LostFocus += (_, _) => Raise("blur", new JsonObject());
-                    }
+                    element.GotFocus += (_, _) => Raise("focus", new JsonObject());
                 }
                 else
                 {
-                    _warn($"节点 {nodeId}: {element.GetType().Name} 没有焦点事件");
+                    element.LostFocus += (_, _) => Raise("blur", new JsonObject());
                 }
 
                 break;
@@ -222,14 +281,19 @@ internal sealed class EventBridge
                 BindWebView2Navigation(element, nodeId, eventName, Raise);
                 break;
 
-            // 这两个事件的订阅时机不在绑定阶段：menu 由 contextMenu 的菜单项自行回传，
-            // imageFailed 跟着 BitmapImage 的加载走。这里认下名字，免得刷「未知事件」。
+            // 这几个事件的订阅时机不在绑定阶段：menu 由 contextMenu 的菜单项自行回传，
+            // imageFailed 跟着 BitmapImage 的加载走，scriptResult 是脚本 invoke 的异步回执。
+            // 这里认下名字，免得刷「未知事件」。
             case "menu":
             case "imageFailed":
+            case "scriptResult":
                 break;
 
             default:
-                _warn($"节点 {nodeId}: 未知事件 \"{eventName}\"");
+                if (!ExtendedEvents.TryBind(element, eventName, Raise))
+                {
+                    _warn($"节点 {nodeId}: 未知事件 \"{eventName}\"");
+                }
                 break;
         }
     }
@@ -244,6 +308,14 @@ internal sealed class EventBridge
             case TextBox box:
                 box.TextChanged += (_, _) =>
                     raise("change", new JsonObject { ["text"] = box.Text });
+                break;
+
+            // 密码框不是 TextBox 的子类。事件负载仍用 "text" 字段，
+            // 这样 Python 侧 Entry 的 _var_field 不用为密码框开特例，
+            // entry.get() / 变量绑定能照常工作。
+            case PasswordBox password:
+                password.PasswordChanged += (_, _) =>
+                    raise("change", new JsonObject { ["text"] = password.Password });
                 break;
 
             case CheckBox check:
@@ -290,7 +362,10 @@ internal sealed class EventBridge
                 break;
 
             default:
-                _warn($"节点 {nodeId}: {element.GetType().Name} 没有 change 事件");
+                if (!ExtendedEvents.TryBindChange(element, raise))
+                {
+                    _warn($"节点 {nodeId}: {element.GetType().Name} 没有 change 事件");
+                }
                 break;
         }
     }
@@ -311,7 +386,10 @@ internal sealed class EventBridge
                 break;
 
             default:
-                _warn($"节点 {nodeId}: {element.GetType().Name} 没有 selectionChanged 事件");
+                if (!ExtendedEvents.TryBindSelectionChanged(element, raise))
+                {
+                    _warn($"节点 {nodeId}: {element.GetType().Name} 没有 selectionChanged 事件");
+                }
                 break;
         }
     }

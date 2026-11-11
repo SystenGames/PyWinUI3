@@ -155,7 +155,31 @@ Python                          Host
 `play` / `pause` / `stop` / `seek`（仅 `Media`，`seek` 用 `args: {"seconds": 12.5}`）、
 `navigate`（仅 `WebView2`，`args: {"url": "https://..."}`）/ `reload` / `go_back` / `go_forward` /
 `navigate_to_string`（仅 `WebView2`，`args: {"html": "<h1>Hi</h1>"}`，会等
-`CoreWebView2` 初始化完成再调用，见 3.5.4）。
+`CoreWebView2` 初始化完成再调用，见 3.5.4）/
+`select_range`（`args: {"start": 0, "length": 3}`）、`clear` / `copy` / `cut` / `paste`、
+`show` / `hide`（InfoBar / Expander / NavigationView）、`scroll_into_view`、
+`execute_script`（仅 `WebView2`，`args: {"script": "..."}`，结果以 `scriptResult`
+事件回推）、`minimize` / `maximize` / `restore` / `activate`（窗口级，见 3.1）。
+
+#### `query` — 读取运行时值
+
+```json
+{ "op": "query", "id": "q1", "node": "n2", "key": "actualWidth" }
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `id` | string | 是 | 请求 id，回包原样带回，用于并发配对 |
+| `node` | string | 是 | 目标节点 id；窗口级键传根节点 id 即可 |
+| `key` | string | 是 | 要读的键，清单见 3.7 |
+| `args` | object | 否 | 预留给带参数的查询 |
+
+`invoke` 是单向命令、没有返回值，事件又只在「发生变化」时推送，于是
+`ActualWidth`、窗口是否最大化、文本框选区这类「随时问一句」的值一直读不到。
+`query` 补的就是这半边：宿主在 UI 线程同步读取，回一条 `t="result"`。
+
+Python 侧 `App.query()` 是阻塞式的：等到配对结果才返回，等待期间收到的
+事件消息暂存到内部队列，事件循环下一轮照常派发，所以在事件回调里调用也安全。
 
 #### `dialog` — 弹出模态对话框
 
@@ -169,7 +193,11 @@ Python                          Host
 | `body` | 否 | 正文，纯文本 |
 | `kind` | 否 | `info` / `warn` / `error`，默认 `info` |
 
-宿主用 `ContentDialog` 模态显示，用户点「知道了」后关闭，宿主回 `ack`。
+宿主用 `ContentDialog` 模态显示，用户点按钮后关闭，宿主回 `ack`。
+`kind` 会真正影响外观：`info` 蓝色信息图标、按钮「知道了」；
+`warn` 橙色警告图标、「我知道了」；`error` 红色错误图标、「关闭」；
+`success` 绿色对勾、「好的」。窗口刚切换完内容时宿主会短暂等待
+`XamlRoot` 就绪（最多 500ms），避免「启动后立刻弹提示」被丢弃。
 
 同一时刻只能有一个对话框：若上一个还没关，新请求被丢弃并回
 `{"t":"error","code":"busy"}`。这是 WinUI 的硬性限制，不是设计选择。
@@ -229,6 +257,20 @@ Python                          Host
 ```
 
 Python 侧据此抑制双向绑定回环。
+
+#### `result` — query 的应答
+
+```json
+{ "t": "result", "id": "q1", "ok": true, "value": 128.0 }
+```
+
+```json
+{ "t": "result", "id": "q2", "ok": false, "error": "未知的 query 键 \"foo\"" }
+```
+
+`value` 可以是任意 JSON 值（数字、字符串、布尔、数组、对象、null）。
+`ok=false` 时 Python 侧抛 `UiError`，**不会**静默把「读不到」当成「读到空值」。
+迟到（调用方已超时）的 result 会被忽略。
 
 #### `error` — 渲染或解析错误
 
@@ -325,6 +367,48 @@ Python 侧据此抑制双向绑定回环。
 | `WebView2`        | `WebView2`；缺运行时时降级成灰色 `Border`，见 3.5.3 | 否      |
 | `Separator`       | `Border`（1px 线）              | 否      |
 
+扩展控件（v1 后期补齐，全部是 WinUI 3 / Windows App SDK 1.8 内置类型）：
+
+| `type` | 映射到 | 可含子节点 |
+| --- | --- | --- |
+| `NumberBox` | `NumberBox` | 否 |
+| `PasswordBox` | `PasswordBox` | 否 |
+| `RichTextBlock` | `RichTextBlock`（当前只放纯文本段落） | 否 |
+| `RichEditBox` | `RichEditBox` | 否 |
+| `AutoSuggestBox` | `AutoSuggestBox` | 否 |
+| `DatePicker` | `DatePicker` | 否 |
+| `TimePicker` | `TimePicker` | 否 |
+| `CalendarDatePicker` | `CalendarDatePicker` | 否 |
+| `CalendarView` | `CalendarView` | 否 |
+| `RatingControl` | `RatingControl` | 否 |
+| `ColorPicker` | `ColorPicker` | 否 |
+| `DropDownButton` | `DropDownButton` | 否 |
+| `ToggleSplitButton` | `ToggleSplitButton` | 否 |
+| `PersonPicture` | `PersonPicture` | 否 |
+| `GridView` | `GridView` | 否 |
+| `FlipView` | `FlipView` | 否 |
+| `Pivot` | `Pivot`（条目转成 `PivotItem`） | 否 |
+| `TabView` | `TabView`（条目转成 `TabViewItem`） | 否 |
+| `TreeView` | `TreeView`（嵌套 dict 转成 `TreeViewNode`） | 否 |
+| `NavigationView` | `NavigationView`（条目转成 `NavigationViewItem`） | 是（右侧内容区） |
+| `MenuBar` | `MenuBar`（条目转成 `MenuBarItem`） | 否 |
+| `CommandBar` | `CommandBar`（条目转成 `AppBarButton`） | 否 |
+| `BreadcrumbBar` | `BreadcrumbBar` | 否 |
+| `ItemsView` | `ItemsView` | 否 |
+| `RadioButtons` | `RadioButtons` | 否 |
+| `SelectorBar` | `SelectorBar`（条目转成 `SelectorBarItem`） | 否 |
+| `InfoBar` | `InfoBar` | 否 |
+| `Expander` | `Expander` | 是 |
+| `BorderBox` | `Border` + 内层 `StackPanel` | 是 |
+| `Viewbox` | `Viewbox` + 内层 `StackPanel` | 是 |
+| `RelativePanel` | `RelativePanel`（未开放附加对齐属性） | 是 |
+| `TwoPaneView` | `TwoPaneView`（子控件进 Pane1） | 是 |
+| `RefreshContainer` | `RefreshContainer` + 内层 `StackPanel` | 是 |
+
+`BorderBox` 单独命名，是为了不和 `Separator` 复用的 `Border` 混淆。
+这些容器创建时都预置一层内层 `StackPanel`，所以子节点挂载规则和
+`Column` / `Scroll` 完全一致，渲染器不需要为它们开特例分支。
+
 未知 `type` 不崩溃：回一条 `error`，该节点渲染成占位 `TextBlock` 显示 `[未知控件: Foo]`。
 
 `Scroll` 在宿主侧是 `ScrollViewer` 套一层 `StackPanel`：节点模型允许一个节点有多个子节点，
@@ -358,6 +442,20 @@ Python 侧据此抑制双向绑定回环。
 | `italic`                                            | bool                                |                   |
 | `tooltip`                                           | string                              | 鼠标悬停提示，空串清除      |
 | `contextMenu`                                       | array                               | 右键菜单，见 3.5.2       |
+| `name` / `tag`                                      | string                              | XAML `Name` / `Tag`，调试与 UI 自动化用 |
+| `tabIndex` / `isTabStop`                            | int / bool                          | Tab 键顺序与是否参与       |
+| `allowDrop` / `isHitTestVisible`                    | bool                                | 拖放 / 命中测试           |
+| `flowDirection`                                     | `ltr`/`rtl`                         | 布局方向               |
+| `selectionStart` / `selectionLength`                | int                                 | 仅 `TextBox`，文本选区     |
+| `isSpellCheckEnabled` / `acceptsReturn`             | bool                                | 仅 `TextBox`             |
+| `decodePixelWidth` / `decodePixelHeight`            | int                                 | 仅 `Image`，见下          |
+| `isEditable` / `isTextSearchEnabled`                | bool                                | 仅 `ComboBox`            |
+| `selectionMode`                                    | `single`/`multiple`/`extended`/`none` | `ListViewBase` / `CalendarView` |
+| `isFullWindow`                                     | bool                                | 仅 `Media`，全屏播放       |
+| `verticalScrollBarVisibility` / `horizontalScrollBarVisibility` | `auto`/`visible`/`hidden`/`disabled` | 仅 `Scroll` |
+
+`decodePixelWidth/Height` 必须在 `BitmapImage.UriSource` 赋值之前落地才有效，
+宿主会在应用一批 props 之前先把这两个值收集到控件上，所以写入顺序无关。
 
 ### 3.5 各控件专有属性
 
@@ -386,6 +484,39 @@ Python 侧据此抑制双向绑定回环。
 | `Image`          | `src`(路径 / URL / data URI), `stretch`(`fill`/`uniform`/`uniformToFill`/`none`)                      |
 | `WebView2`       | `source`(绝对 URL)；缺运行时时静默忽略，见 3.5.3                                                             |
 | `Separator`      | `color`, `thickness`                                                                              |
+
+扩展控件沿用上表里的同名属性：所有带 `items` 的控件都吃
+`items` + `selectedIndex`，`NumberBox` / `RatingControl` 吃 `value` / `min` / `max`，
+`AutoSuggestBox` / `RichEditBox` / `NumberBox` 吃 `placeholder`，
+`DropDownButton` / `ToggleSplitButton` 吃 `text`（按钮文字），
+`InfoBar` 吃 `text`（等价 `message`），`Viewbox` 吃 `stretch`，
+`ColorPicker` 吃 `color`，`ToggleSplitButton` 吃 `checked`。
+下表是扩展控件新增的专有 key：
+
+| 属性 | 类型 | 适用 |
+| --- | --- | --- |
+| `date` | `"YYYY-MM-DD"` | `DatePicker` / `CalendarDatePicker` / `CalendarView` |
+| `time` | `"HH:MM"` | `TimePicker` |
+| `severity` | `info`/`success`/`warning`/`error` | `InfoBar` |
+| `title` / `message` | string | `InfoBar` |
+| `isOpen` / `isClosable` | bool | `InfoBar` |
+| `isExpanded` / `expandDirection` | bool / `down`/`up` | `Expander` |
+| `displayName` / `initials` | string | `PersonPicture` |
+| `paneDisplayMode` | `left`/`top`/`compact`/`minimal`/`auto` | `NavigationView` |
+| `isPaneOpen` / `isBackEnabled` / `isSettingsVisible` | bool | `NavigationView` |
+| `openPaneLength` / `compactPaneLength` | number | `NavigationView` |
+| `spin` | `compact`/`inline`/`hidden` | `NumberBox` |
+| `isClearEnabled` / `maxRating` | bool / int | `RatingControl` |
+| `queryText` | string | `AutoSuggestBox`（等价 `text`） |
+| `content` | string | `DropDownButton` / `ToggleSplitButton` |
+| `maxColumns` | int | `RadioButtons` |
+| `isAddTabButtonVisible` | bool | `TabView` |
+| `panePriority` | `pane1`/`pane2` | `TwoPaneView` |
+| `isMoreButtonVisible` | bool | `ColorPicker` |
+| `header` | string | `Expander` / `NumberBox` / 日期时间控件 / 输入框 / `ComboBox` |
+
+`TreeView` 的 `items` 支持嵌套：
+`{"label": "父节点", "children": ["子1", {"label": "子2", "children": [...]}]}`。
 
 #### 3.5.1 `items` 的两种形态
 
@@ -529,6 +660,42 @@ Python 侧 `WebView2` 构造时常驻订阅 `sourceChanged`，把收到的 `url`
 **枚举值**全部小写 camelCase，例如 `"semibold"`、`"uniformToFill"`、`"stretch"`。  
 收到无法识别的枚举值时用默认值并记一条 `error`，不崩溃。
 
+### 3.7 `query` 键清单
+
+窗口级（与 `node` 指向哪个控件无关，通常传根节点 id）：
+
+| key | 返回 | 说明 |
+| --- | --- | --- |
+| `windowState` | `normal`/`maximized`/`minimized` | |
+| `isMaximized` / `isMinimized` / `isActive` | bool | `isActive` 由 `Window.Activated` 维护 |
+| `windowBounds` | `{x,y,width,height}` | 屏幕坐标，逻辑像素 |
+| `dpiScale` | number | `XamlRoot.RasterizationScale` |
+| `windowTitle` | string | |
+
+通用控件键：
+
+| key | 返回 |
+| --- | --- |
+| `actualWidth` / `actualHeight` / `bounds` | number / number / object；读取前强制 `UpdateLayout()`，不会在首帧返回 0 |
+| `width` / `height` / `opacity` | number（设定值，可能为 NaN） |
+| `isLoaded` / `isVisible` / `isEnabled` / `isFocused` | bool |
+| `name` / `tag` / `controlType` | string |
+| `text` / `password` | string（自动按控件类型取，按钮也能读文字） |
+| `selectionStart` / `selectionLength` / `selectedText` | int / int / string |
+| `isSpellCheckEnabled` / `acceptsReturn` / `isReadOnly` / `maxLength` | bool / bool / bool / int |
+| `value` / `checked` | number / bool |
+| `selectedIndex` / `selectedItem` / `selectedItems` / `selectedCount` / `itemCount` | int / string / array / int / int |
+| `date` / `time` / `color` | string（`color` 为 `#AARRGGBB`） |
+| `isOpen` / `isExpanded` / `severity` / `isPaneOpen` | bool / bool / string / bool |
+| `currentUrl` / `canGoBack` / `canGoForward` / `webTitle` | WebView2 运行时状态 |
+| `position` / `duration` / `isPlaying` / `volume` / `isMuted` / `playbackRate` / `isFullWindow` | Media 播放状态 |
+| `verticalOffset` / `viewportHeight` / `extentHeight` | ScrollViewer 滚动状态 |
+| `imageSource` | string 或 null |
+
+读不到的键（节点不存在、键名拼错、控件类型不匹配）回 `ok=false` 并带 `error`，
+不静默返回 null。这些读取全部在 UI 线程同步完成，因此 `query` 里不能放
+异步操作；WebView2 的 `execute_script` 走 `invoke` + `scriptResult` 事件。
+
 ---
 
 ## 4. 事件
@@ -550,10 +717,40 @@ Python 侧 `WebView2` 构造时常驻订阅 `sourceChanged`，把收到的 `url`
 | `navigationCompleted` | WebView2                                         | `{ "url": "...", "isSuccess": true, "httpStatusCode": 200 }` |
 | `sourceChanged`    | WebView2                                           | `{ "url": "..." }`，含 JS 改地址，见 3.5.4   |
 | `closing`          | Window                                             | `{}`，关闭前触发，首版不支持取消              |
-| `sizeChanged`      | Window                                             | `{ "width": 640.0, "height": 480.0 }` |
+| `sizeChanged`      | Window（根节点）/ 任意控件（非根节点）                       | `{ "width": 640.0, "height": 480.0 }` |
+| `keyDown` / `keyUp` | 任意节点                                          | `{ "key": "A", "keyCode": 65, "ctrl": false, "shift": false, "alt": false, "windows": false }` |
+| `gotFocus` / `lostFocus` | 任意节点                                     | `{}`，`focus`/`blur` 的别名 |
+| `textChanging`     | TextBox                                            | `{ "text": "..." }` |
+| `loaded` / `unloaded` | 任意节点                                        | `loaded` 带 `{width,height}`，`unloaded` 为 `{}` |
+| `dragEnter` / `dragOver` / `dragLeave` / `drop` | 任意节点（先 `allowDrop=true`） | `{ "accepted": true }` |
+| `tapped` / `doubleTapped` / `rightTapped` | 任意节点                     | `{ "x": 12.0, "y": 8.0 }` |
+| `pointerMoved` / `pointerReleased` / `pointerWheelChanged` | 任意节点   | `{x,y}`，滚轮额外带 `delta` |
+| `contextRequested` | 任意节点                                             | `{}` |
+| `valueChanged`     | NumberBox, RatingControl, Slider                    | `{ "value": 3.0 }` |
+| `colorChanged`     | ColorPicker                                        | `{ "color": "#FF0078D4" }` |
+| `dateChanged` / `timeChanged` / `selectedDatesChanged` | 日期时间控件           | `{ "date": "..." }` / `{ "time": "..." }` |
+| `querySubmitted` / `suggestionChosen` | AutoSuggestBox                      | `{ "text": "...", "value": "..." }` |
+| `itemClick`        | GridView, ListViewBase, BreadcrumbBar, TreeView     | `{ "index": 0, "value": "..." }` |
+| `expanding` / `collapsed` | Expander                                    | `{ "expanded": true }` |
+| `closeButtonClick` | InfoBar                                            | `{}` |
+| `tabCloseRequested` | TabView                                           | `{ "value": "..." }` |
+| `paneOpening` / `paneClosed` / `displayModeChanged` | NavigationView         | `{}` / `{ "mode": "..." }` |
+| `refreshRequested` | RefreshContainer                                   | `{}` |
+| `modeChanged`      | TwoPaneView                                        | `{ "mode": "..." }` |
+| `scriptResult`     | WebView2（`execute_script` 的异步回执）                  | `{ "result": "..." }` 或 `{ "error": "..." }` |
+| `windowActivated`  | Window                                             | `{ "active": true }` |
+| `windowStateChanged` | Window                                           | `{ "state": "maximized" }` |
+| `menu`             | MenuBar / CommandBar 的条目（绑在父控件上）                 | `{ "index": 0, "value": "..." }`（用 `click` 事件名） |
+
+`change` 事件同样覆盖扩展控件：`NumberBox` / `RatingControl` 带 `value`，
+日期时间控件带 `date` / `time`，`AutoSuggestBox` 带 `text`，
+`ColorPicker` 带 `color`，`Expander` 带 `expanded`，列表类带 `index` / `value`。
+`selectionChanged` 也覆盖 `GridView` / `FlipView` / `Pivot` /
+`NavigationView` / `RadioButtons`。
 
 窗口事件挂在根节点上：Python 侧照常 `win.bind("closing", fn)`，
-宿主会自动把处理器挂到 `Window` 而不是根元素。
+宿主会自动把处理器挂到 `Window` 而不是根元素。`sizeChanged` 在根节点上
+走窗口级、在其他节点上走控件级——同一事件名，按节点是否为 root 分流。
 
 `change` 的 `data` 按控件类型：
 
@@ -627,5 +824,8 @@ win.mainloop()
 
 - 协议版本是单调整数，**不兼容变更**才 +1
 - 新增可选字段**不算**不兼容变更，旧端忽略即可
-- 新增控件类型、新增事件名**不算**不兼容变更
+- 新增控件类型、新增事件名、新增 `op` / `t` 消息类型**不算**不兼容变更：
+  旧端永远不会发出它，也就永远不会收到应答；协议版本因此仍为 1
 - 重命名字段、改变字段语义、删除字段**算**不兼容变更
+- 本次新增的 `query` / `result` 属于「新增消息类型」，旧宿主收到未知 `op` 会回
+  `bad-protocol` 错误而不会崩；Python 侧 `App.query()` 因此要求宿主同步更新

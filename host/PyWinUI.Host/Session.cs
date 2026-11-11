@@ -27,6 +27,7 @@ internal sealed class Session
     private readonly DispatcherQueue _dispatcher;
     private readonly StdioChannel _channel;
     private readonly FormRenderer _renderer;
+    private readonly QueryExecutor _queries;
 
     private long _rev;
     private bool _handshaken;
@@ -37,6 +38,7 @@ internal sealed class Session
         _window = window;
         _dispatcher = dispatcher;
         _channel = new StdioChannel();
+        _queries = new QueryExecutor(window);
         _renderer = new FormRenderer(
             window,
             Emit,
@@ -122,6 +124,10 @@ internal sealed class Session
                 HandleInvoke(invoke);
                 break;
 
+            case QueryMessage query:
+                HandleQuery(query);
+                break;
+
             case DialogMessage dialog:
                 ShowDialog(dialog);
                 Send(Outbound.Ack(_rev));
@@ -166,6 +172,12 @@ internal sealed class Session
 
     private void HandleInvoke(InvokeMessage invoke)
     {
+        // 窗口级命令不依赖任何节点，先处理，避免根节点还没建好时被挡住
+        if (TryWindowInvoke(invoke.Method))
+        {
+            return;
+        }
+
         if (!_renderer.TryGetElement(invoke.Id, out var element))
         {
             Send(Outbound.Error("unknown-node", $"invoke 的目标不存在: {invoke.Id}", invoke.Id));
@@ -189,16 +201,25 @@ internal sealed class Session
                     break;
 
                 case "select_all":
-                    if (element is TextBox box)
+                    switch (element)
                     {
-                        box.SelectAll();
+                        case TextBox box:
+                            box.SelectAll();
+                            break;
+                        case PasswordBox passwordBox:
+                            passwordBox.SelectAll();
+                            break;
+                        case RichEditBox richBox:
+                            richBox.Document.Selection.Expand(Microsoft.UI.Text.TextRangeUnit.Story);
+                            break;
                     }
 
                     break;
 
                 case "scroll_to":
                     var index = ValueParsers.AsInt(invoke.Args?["index"]) ?? 0;
-                    if (element is ListView list && list.Items.Count > index && index >= 0)
+                    // ListViewBase 同时覆盖 ListView 和 GridView
+                    if (element is ListViewBase list && list.Items.Count > index && index >= 0)
                     {
                         list.ScrollIntoView(list.Items[index]);
                     }
@@ -290,16 +311,77 @@ internal sealed class Session
                     break;
 
                 default:
-                    Send(Outbound.Error(
-                        "bad-protocol",
-                        $"未知的 invoke 方法: {invoke.Method}",
-                        invoke.Id));
+                    if (!ExtendedInvoke.TryInvoke(
+                            element, invoke.Method, invoke.Args, invoke.Id,
+                            message => HostLog.Write("[warn] " + message), Emit))
+                    {
+                        Send(Outbound.Error(
+                            "bad-protocol",
+                            $"未知的 invoke 方法: {invoke.Method}",
+                            invoke.Id));
+                    }
                     break;
             }
         }
         catch (Exception ex)
         {
             Send(Outbound.Error("internal", $"invoke {invoke.Method} 失败: {ex.Message}", invoke.Id));
+        }
+    }
+
+    /// <summary>
+    /// 最小化 / 最大化 / 还原 / 激活。这些是 OverlappedPresenter 的能力，
+    /// 全屏或紧凑型 presenter 下静默跳过，不让整个窗口报错。
+    /// </summary>
+    private bool TryWindowInvoke(string method)
+    {
+        if (method is not ("minimize" or "maximize" or "restore" or "activate"))
+        {
+            return false;
+        }
+
+        try
+        {
+            if (method == "activate")
+            {
+                _window.Activate();
+                return true;
+            }
+
+            if (_window.AppWindow.Presenter is OverlappedPresenter presenter)
+            {
+                switch (method)
+                {
+                    case "minimize": presenter.Minimize(); break;
+                    case "maximize": presenter.Maximize(); break;
+                    case "restore": presenter.Restore(); break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Send(Outbound.Error("internal", $"窗口命令 {method} 失败: {ex.Message}", null));
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// 读一个运行时值。query 走的是和 render/patch 相同的 UI 线程调度，
+    /// 所以读取的是「已经落地的最新状态」，不会读到半应用完的补丁。
+    /// 节点不存在时仍然允许窗口级键（例如 windowState），其余回 ok=false。
+    /// </summary>
+    private void HandleQuery(QueryMessage query)
+    {
+        _renderer.TryGetElement(query.Node, out var element);
+        try
+        {
+            var value = _queries.Read(element, query.Key, query.Args);
+            Send(Outbound.Result(query.Id, true, value));
+        }
+        catch (Exception ex)
+        {
+            Send(Outbound.Result(query.Id, false, null, ex.Message));
         }
     }
 
@@ -354,7 +436,16 @@ internal sealed class Session
             return;
         }
 
+        // 窗口 Content 刚切换完的那一帧 XamlRoot 可能还是 null，
+        // 此时直接放弃会让「启动后立刻弹提示」这种常见用法莫名失效。
+        // 等几帧再取，最多 500ms；ContentDialog 本来就是异步的，等得起。
         var xamlRoot = _window.Content?.XamlRoot;
+        for (var attempt = 0; attempt < 10 && xamlRoot is null; attempt++)
+        {
+            await Task.Delay(50);
+            xamlRoot = _window.Content?.XamlRoot;
+        }
+
         if (xamlRoot is null)
         {
             Send(Outbound.Error("internal", "窗口还没有内容，无法显示对话框", null));
@@ -364,16 +455,48 @@ internal sealed class Session
         _dialogOpen = true;
         try
         {
+            // kind 以前解析了却没用：info / warn / error 三个级别长得一模一样。
+            // 这里用图标、颜色和按钮文字把级别显式区分开。
+            var kind = (message.Kind ?? "info").ToLowerInvariant();
+            var (glyph, accent, buttonText) = kind switch
+            {
+                "warn" or "warning" => ("\uE7BA", Microsoft.UI.Colors.Orange, "我知道了"),
+                "error" => ("\uEA39", Microsoft.UI.Colors.OrangeRed, "关闭"),
+                "success" => ("\uE930", Microsoft.UI.Colors.ForestGreen, "好的"),
+                _ => ("\uE946", Microsoft.UI.Colors.DodgerBlue, "知道了"),
+            };
+
+            var body = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 12,
+                Margin = new Thickness(0, 8, 0, 0),
+            };
+            body.Children.Add(new FontIcon
+            {
+                Glyph = glyph,
+                FontSize = 26,
+                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(accent),
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            body.Children.Add(new TextBlock
+            {
+                Text = message.Body,
+                TextWrapping = TextWrapping.Wrap,
+                MaxWidth = 380,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+
             var dialog = new ContentDialog
             {
                 Title = string.IsNullOrEmpty(message.Title) ? "提示" : message.Title,
-                Content = message.Body,
-                CloseButtonText = "知道了",
+                Content = body,
+                CloseButtonText = buttonText,
                 DefaultButton = ContentDialogButton.Close,
                 XamlRoot = xamlRoot,
             };
 
-            HostLog.Write($"[dialog] show: {message.Title} / {message.Body}");
+            HostLog.Write($"[dialog] show ({kind}): {message.Title} / {message.Body}");
             await dialog.ShowAsync();
             HostLog.Write("[dialog] closed");
         }

@@ -88,6 +88,28 @@ def invoke(node_id: str, method: str, args: dict[str, Any] | None = None) -> dic
     return message
 
 
+def query(
+    request_id: str,
+    node_id: str,
+    key: str,
+    args: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """向宿主读一个运行时值。宿主回一条 ``t="result"`` 的消息配对。
+
+    与 ``invoke`` 的区别：invoke 是单向命令，query 有应答。
+    ``request_id`` 由调用方生成，允许并发时区分不同请求。
+    """
+    message: dict[str, Any] = {
+        "op": "query",
+        "id": request_id,
+        "node": node_id,
+        "key": key,
+    }
+    if args:
+        message["args"] = args
+    return message
+
+
 def dialog(title: str, body: str, kind: str = "info") -> dict[str, Any]:
     """弹出模态对话框。会阻塞窗口交互，适合调试与演示。"""
     return {"op": "dialog", "title": title, "body": body, "kind": kind}

@@ -55,10 +55,19 @@ internal sealed class PropertyApplier
             return;
         }
 
+        // 图片解码尺寸要在 src 之前收集好，与 kwargs 的书写顺序无关
+        ExtendedProperties.Prepare(element, props);
+
         foreach (var pair in props)
         {
             try
             {
+                // 扩展控件/新增属性优先；返回 false 的交回下面原有的 switch
+                if (ExtendedProperties.TryApply(element, pair.Key, pair.Value, _warn))
+                {
+                    continue;
+                }
+
                 ApplyOne(element, pair.Key, pair.Value);
             }
             catch (Exception ex)
@@ -1540,6 +1549,7 @@ internal sealed class PropertyApplier
         try
         {
             var bitmap = new BitmapImage();
+            ExtendedProperties.ApplyDecodeHints(image, bitmap);
             bitmap.ImageFailed += (_, e) => EmitTo(nodeId, "imageFailed", new JsonObject
             {
                 ["error"] = e.ErrorMessage ?? "unknown",

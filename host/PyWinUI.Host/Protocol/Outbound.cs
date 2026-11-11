@@ -39,6 +39,19 @@ public static class Outbound
         echo = echo ? true : (bool?)null,
     });
 
+    /// <summary>
+    /// query 的应答。value 允许是任意 JSON 值（数字、字符串、布尔、数组、对象、null）。
+    /// 失败时 ok=false 并带 error，Python 侧据此抛异常而不是静默返回 None。
+    /// </summary>
+    public static string Result(string id, bool ok, JsonNode? value, string? error = null) => Serialize(new
+    {
+        t = "result",
+        id,
+        ok,
+        value,
+        error = ok ? null : error,
+    });
+
     public static string Error(string code, string message, string? id = null) => Serialize(new
     {
         t = "error",

@@ -231,6 +231,43 @@ class Widget:
         self._app._send_patch([protocol.op_set(self._id, events=dict(self._handler_ids))])
         return handler_id
 
+    # ---- 常用事件的语义化快捷绑定 ----
+
+    def on_key_down(self, handler: Callable[..., Any]) -> str:
+        """按键按下；``e.data`` 含 ``key`` / ``keyCode`` / ``ctrl`` / ``shift`` / ``alt``。"""
+        return self.bind("keyDown", handler)
+
+    def on_key_up(self, handler: Callable[..., Any]) -> str:
+        return self.bind("keyUp", handler)
+
+    def on_loaded(self, handler: Callable[..., Any]) -> str:
+        """控件进入可视树、完成首次布局；``e.data`` 含真实宽高。"""
+        return self.bind("loaded", handler)
+
+    def on_unloaded(self, handler: Callable[..., Any]) -> str:
+        return self.bind("unloaded", handler)
+
+    def on_size_changed(self, handler: Callable[..., Any]) -> str:
+        """控件自身尺寸变化；``e.data`` 含 ``width`` / ``height``。"""
+        return self.bind("sizeChanged", handler)
+
+    def on_got_focus(self, handler: Callable[..., Any]) -> str:
+        return self.bind("gotFocus", handler)
+
+    def on_lost_focus(self, handler: Callable[..., Any]) -> str:
+        return self.bind("lostFocus", handler)
+
+    def on_drop(self, handler: Callable[..., Any]) -> str:
+        """拖放落下；配合 ``enable_drop()`` 使用。"""
+        return self.bind("drop", handler)
+
+    def enable_drop(self, enabled: bool = True) -> None:
+        self.configure(allow_drop=bool(enabled))
+
+    def set_name(self, name: str) -> None:
+        """给 WinUI 元素设 ``Name``（UI 自动化 / 调试用，不影响协议 id）。"""
+        self.configure(name=name)
+
     def unbind(self, event: str) -> None:
         handler_id = self._handler_ids.pop(event, None)
         self._events.pop(event, None)
@@ -303,6 +340,59 @@ class Widget:
 
     def focus(self) -> None:
         self._app._send_invoke(self._id, "focus")
+
+    # ---- 运行时读取（协议 query/result） ----
+
+    def query(self, key: str, *, timeout: float = 2.0, args: dict[str, Any] | None = None) -> Any:
+        """向宿主读一个运行时值，见 ``App.query``。
+
+        常用键：``actualWidth`` / ``actualHeight`` / ``bounds`` / ``isLoaded`` /
+        ``isVisible`` / ``isEnabled`` / ``isFocused`` / ``text`` / ``value`` /
+        ``selectedIndex`` / ``selectedItems`` / ``controlType`` / ``dpiScale``。
+        窗口级键（``windowState`` / ``isActive`` / ``windowBounds``）也可以从
+        任意控件发起，宿主按 key 识别，和节点无关。
+        """
+        return self._app.query(self._id, key, timeout=timeout, args=args)
+
+    @property
+    def actual_width(self) -> float:
+        """布局完成后的真实宽度（逻辑像素），不是 ``width`` 的设定值。"""
+        return float(self.query("actualWidth") or 0)
+
+    @property
+    def actual_height(self) -> float:
+        """布局完成后的真实高度（逻辑像素）。"""
+        return float(self.query("actualHeight") or 0)
+
+    @property
+    def actual_size(self) -> tuple[float, float]:
+        """``(actual_width, actual_height)``。"""
+        return self.actual_width, self.actual_height
+
+    @property
+    def is_loaded(self) -> bool:
+        return bool(self.query("isLoaded"))
+
+    @property
+    def is_visible(self) -> bool:
+        return bool(self.query("isVisible"))
+
+    @property
+    def is_enabled(self) -> bool:
+        return bool(self.query("isEnabled"))
+
+    @property
+    def is_focused(self) -> bool:
+        return bool(self.query("isFocused"))
+
+    @property
+    def control_type(self) -> str:
+        """宿主实际创建的 WinUI 类名，排查「我写的类型到底变成了啥」时有用。"""
+        return str(self.query("controlType") or "")
+
+    @property
+    def dpi_scale(self) -> float:
+        return float(self.query("dpiScale") or 1.0)
 
     def scroll_to(self, index: int = 0) -> None:
         self._app._send_invoke(self._id, "scroll_to", {"index": index})
@@ -624,6 +714,38 @@ class Entry(Widget):
 
     def select_all(self) -> None:
         self._app._send_invoke(self._id, "select_all")
+
+    def select_range(self, start: int, length: int = 0) -> None:
+        """选中 ``[start, start+length)`` 区间的字符。"""
+        self._app._send_invoke(self._id, "select_range", {"start": start, "length": length})
+
+    def clear(self) -> None:
+        self._app._send_invoke(self._id, "clear")
+
+    def copy(self) -> None:
+        """把选区复制到剪贴板。"""
+        self._app._send_invoke(self._id, "copy")
+
+    def cut(self) -> None:
+        self._app._send_invoke(self._id, "cut")
+
+    def paste(self) -> None:
+        self._app._send_invoke(self._id, "paste")
+
+    @property
+    def selection(self) -> tuple[int, int]:
+        """``(起始位置, 选中长度)``，向宿主实时读取。"""
+        start = int(self.query("selectionStart") or 0)
+        length = int(self.query("selectionLength") or 0)
+        return start, length
+
+    @property
+    def selected_text(self) -> str:
+        return str(self.query("selectedText") or "")
+
+    def set_spellcheck(self, enabled: bool = True) -> None:
+        """开关拼写检查红线；同时可用 ``accepts_return`` 控制多行回车。"""
+        self.configure(is_spell_check_enabled=bool(enabled))
 
 
 class Checkbox(Widget):
@@ -975,6 +1097,14 @@ class Image(Widget):
         """加载失败回调，错误信息在 ``e.data["error"]``。"""
         return self.bind("imageFailed", handler)
 
+    def set_decode_size(self, width: int | None = None, height: int | None = None) -> None:
+        """按目标像素解码大图，避免把 4000px 的原图整个塞进内存。
+
+        要在 ``src`` 之前（或同一批 ``configure``）设置；宿主会先收集这两个
+        值再创建 ``BitmapImage``，和 kwargs 的书写顺序无关。
+        """
+        self.configure(decode_pixel_width=width, decode_pixel_height=height)
+
 
 class Media(Widget):
     """媒体播放器（视频 / 音频）。
@@ -1030,6 +1160,33 @@ class Media(Widget):
         写成动词比写成赋值更好读。
         """
         self._app._send_invoke(self._id, "seek", {"seconds": max(0.0, float(seconds))})
+
+    # 下面这些是播放器运行时的真实状态，必须问宿主；
+    # ``position`` / ``volume`` / ``loop`` 是「设定值」，两者不要混用。
+    @property
+    def current_position(self) -> float:
+        return float(self.query("position") or 0)
+
+    @property
+    def duration(self) -> float:
+        """媒体总时长（秒），未打开时返回 0。"""
+        return float(self.query("duration") or 0)
+
+    @property
+    def is_playing(self) -> bool:
+        return bool(self.query("isPlaying"))
+
+    @property
+    def is_muted_now(self) -> bool:
+        return bool(self.query("isMuted"))
+
+    @property
+    def is_full_window(self) -> bool:
+        return bool(self.query("isFullWindow"))
+
+    @is_full_window.setter
+    def is_full_window(self, value: bool) -> None:
+        self.configure(is_full_window=bool(value))
 
     @property
     def loop(self) -> bool:
@@ -1162,3 +1319,34 @@ class WebView2(Widget):
     def go_forward(self) -> None:
         """前进。没有可前进的历史时宿主侧静默跳过。"""
         self._app._send_invoke(self._id, "go_forward")
+
+    # ---- 直接向宿主读状态（事件驱动之外的一条路） ----
+
+    @property
+    def browser_url(self) -> str:
+        """立刻向宿主读一次浏览器地址，不等导航事件。冷启动 Core 未就绪时可能是空串。"""
+        return str(self.query("currentUrl") or "")
+
+    @property
+    def can_go_back(self) -> bool:
+        return bool(self.query("canGoBack"))
+
+    @property
+    def can_go_forward(self) -> bool:
+        return bool(self.query("canGoForward"))
+
+    @property
+    def web_title(self) -> str:
+        return str(self.query("webTitle") or "")
+
+    def execute_script(self, script: str) -> None:
+        """在页面里执行一段 JavaScript。
+
+        invoke 没有返回值，结果以 ``scriptResult`` 事件回推，
+        用 ``on_script_result()`` 接收；``e.data["result"]`` 是 JSON 字符串，
+        出错时给 ``e.data["error"]``。
+        """
+        self._app._send_invoke(self._id, "execute_script", {"script": str(script)})
+
+    def on_script_result(self, handler: Callable[..., Any]) -> str:
+        return self.bind("scriptResult", handler)

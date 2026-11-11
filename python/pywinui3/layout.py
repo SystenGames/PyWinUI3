@@ -62,6 +62,26 @@ class Scroll(Widget):
     def __init__(self, master: Any, spacing: int = 0, **kwargs: Any):
         super().__init__(master, spacing=spacing, **kwargs)
 
+    @property
+    def vertical_offset(self) -> float:
+        """当前滚动位置（逻辑像素）。"""
+        return float(self.query("verticalOffset") or 0)
+
+    @property
+    def viewport_height(self) -> float:
+        return float(self.query("viewportHeight") or 0)
+
+    @property
+    def extent_height(self) -> float:
+        return float(self.query("extentHeight") or 0)
+
+    def set_scroll_bars(self, vertical: str = "auto", horizontal: str = "disabled") -> None:
+        """控制滚动条显隐：``auto`` / ``visible`` / ``hidden`` / ``disabled``。"""
+        self.configure(
+            vertical_scroll_bar_visibility=vertical,
+            horizontal_scroll_bar_visibility=horizontal,
+        )
+
 
 class Grid(Widget):
     """二维网格容器。

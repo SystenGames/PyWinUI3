@@ -56,10 +56,15 @@ class App:
         self._rev = 0
         self._node_seq = 0
         self._handler_seq = 0
+        self._query_seq = 0
 
         self._nodes: dict[str, Any] = {}
         self._handlers: dict[str, Callable[..., Any]] = {}
         self._window: Any = None
+
+        # query() 同步等 result 时，中途到达的事件消息不能丢，先存这里，
+        # 事件循环下一轮优先派发。回调里调 query 也安全（可重入）。
+        self._inbox: list[dict[str, Any]] = []
 
         self._rendered = False
         self._running = False
@@ -175,6 +180,12 @@ class App:
         self._running = True
 
         while self._running:
+            # query() 阻塞期间攒下的消息优先派发，保证事件不丢、顺序不乱
+            if self._inbox:
+                self._dispatch(self._inbox.pop(0))
+                self._run_timers()
+                continue
+
             try:
                 message = self._host.recv(timeout=self._next_timeout())
             except HostTimeout:
@@ -310,6 +321,59 @@ class App:
             self._host.send(protocol.dialog(title, body, kind))
         except HostExited:
             pass
+
+    # ------------------------------------------------------------------
+    # 运行时读取（query / result）
+    # ------------------------------------------------------------------
+
+    def query(
+        self,
+        node_id: str,
+        key: str,
+        *,
+        timeout: float = 2.0,
+        args: dict[str, Any] | None = None,
+    ) -> Any:
+        """同步读取宿主机上的一个运行时值。
+
+        这是协议里唯一有应答的消息：``invoke`` 只能让宿主做事，
+        ``event`` 只在发生时推送，而 ``ActualWidth``、窗口是否最大化、
+        文本框选区这类值必须「随时问一句」。
+
+        等待期间收到的事件消息会存进 ``_inbox``，事件循环下一轮照常派发，
+        所以在回调里调用也是安全的。宿主没启动或超时会抛异常，
+        不会静默返回 ``None``——读不到值和读到空值是两回事。
+
+        ::
+
+            w = ui.Button(win, "确定")
+            win.after(1000, lambda: print(w.actual_width, app.query(w._id, "text")))
+        """
+        host = self._host
+        if host is None:
+            raise RuntimeError("宿主尚未启动，无法查询运行时状态")
+
+        self._query_seq += 1
+        request_id = f"q{self._query_seq}"
+        host.send(protocol.query(request_id, node_id, key, args))
+
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise HostTimeout(f"读取 \"{key}\" 超时（{timeout:.2f}s）")
+
+            try:
+                message = host.recv(timeout=min(remaining, 0.1))
+            except HostTimeout:
+                continue
+
+            if message.get("t") == "result" and message.get("id") == request_id:
+                if not message.get("ok", False):
+                    raise UiError("query", str(message.get("error", "查询失败")), node_id)
+                return message.get("value")
+
+            self._inbox.append(message)
 
     def _shutdown(self) -> None:
         host = self._host

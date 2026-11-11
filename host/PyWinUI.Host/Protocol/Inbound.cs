@@ -38,6 +38,24 @@ public sealed record InvokeMessage : InboundMessage
     public JsonObject? Args { get; init; }
 }
 
+/// <summary>
+/// 同步读取一个运行时值。invoke 是「让宿主做事」的单向命令，
+/// 没有返回值；query 补的是「问宿主要一个值」这半边。
+/// </summary>
+public sealed record QueryMessage : InboundMessage
+{
+    /// <summary>请求 id，回包原样带回，便于并发时配对。</summary>
+    public required string Id { get; init; }
+
+    /// <summary>目标节点 id；窗口级查询传根节点 id。</summary>
+    public required string Node { get; init; }
+
+    /// <summary>要读的键，如 actualWidth / text / windowState。</summary>
+    public required string Key { get; init; }
+
+    public JsonObject? Args { get; init; }
+}
+
 /// <summary>弹出模态对话框。主要用于调试和演示，会阻塞窗口交互。</summary>
 public sealed record DialogMessage : InboundMessage
 {
@@ -82,6 +100,7 @@ public static class Inbound
                 "render" => ParseRender(root),
                 "patch" => ParsePatch(root),
                 "invoke" => ParseInvoke(root),
+                "query" => ParseQuery(root),
                 "dialog" => ParseDialog(root),
                 "close" => ParseClose(root),
                 var op => throw new ProtocolException("bad-protocol", $"未知消息 op \"{op}\""),
@@ -126,6 +145,16 @@ public static class Inbound
     {
         Id = RequireString(e, "id"),
         Method = RequireString(e, "method"),
+        Args = e.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object
+            ? ToJsonObject(a)
+            : null,
+    };
+
+    private static QueryMessage ParseQuery(JsonElement e) => new()
+    {
+        Id = RequireString(e, "id"),
+        Node = RequireString(e, "node"),
+        Key = RequireString(e, "key"),
         Args = e.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object
             ? ToJsonObject(a)
             : null,

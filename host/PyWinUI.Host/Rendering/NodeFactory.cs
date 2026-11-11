@@ -113,6 +113,12 @@ internal static class NodeFactory
                 return CreateSeparator();
 
             default:
+                // 扩展控件单独拆在 ExtendedControls，避免这里变成上百行的巨型 switch
+                if (ExtendedControls.Create(type, props) is { } extended)
+                {
+                    return extended;
+                }
+
                 warn($"节点 {nodeId}: 未知控件类型 \"{type}\"");
                 return CreatePlaceholder(type);
         }

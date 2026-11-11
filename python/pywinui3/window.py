@@ -174,6 +174,53 @@ class Window(Widget):
         """窗口尺寸变化时回调，``e.data`` 里是 ``width`` / ``height``（逻辑像素）。"""
         self.bind("sizeChanged", callback)
 
+    def on_activate(self, callback: Callable[..., None]) -> None:
+        """窗口获得/失去焦点时回调，``e.data["active"]`` 是布尔值。"""
+        self.bind("windowActivated", callback)
+
+    def on_state_changed(self, callback: Callable[..., None]) -> None:
+        """最大化 / 最小化 / 还原时回调，``e.data["state"]`` 是窗口状态。"""
+        self.bind("windowStateChanged", callback)
+
+    # ---- 运行时状态（query/result 读回） ----
+
+    @property
+    def state(self) -> str:
+        """``normal`` / ``maximized`` / ``minimized``。"""
+        return str(self.query("windowState") or "normal")
+
+    @property
+    def is_maximized(self) -> bool:
+        return self.state == "maximized"
+
+    @property
+    def is_minimized(self) -> bool:
+        return self.state == "minimized"
+
+    @property
+    def is_active(self) -> bool:
+        return bool(self.query("isActive"))
+
+    @property
+    def window_bounds(self) -> dict[str, Any]:
+        """``{"x", "y", "width", "height"}``，窗口在屏幕上的真实位置与尺寸。"""
+        return dict(self.query("windowBounds") or {})
+
+    # ---- 窗口动作 ----
+
+    def minimize(self) -> None:
+        self._app._send_invoke(self._id, "minimize")
+
+    def maximize(self) -> None:
+        self._app._send_invoke(self._id, "maximize")
+
+    def restore(self) -> None:
+        self._app._send_invoke(self._id, "restore")
+
+    def activate(self) -> None:
+        """把窗口提到前台并激活。"""
+        self._app._send_invoke(self._id, "activate")
+
     def protocol(self, _name: str, callback: Callable[..., None]) -> None:
         """tkinter 兼容：``protocol("WM_DELETE_WINDOW", fn)``。"""
         self.on_close(callback)

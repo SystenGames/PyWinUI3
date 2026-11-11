@@ -449,12 +449,30 @@ internal sealed class FormRenderer
     /// 真正装内容的是里面那层 StackPanel。把差异收在这里，
     /// 建树、插入、移动三条路径就不用各自判断一次。
     /// </summary>
-    private static Panel? ChildHostOf(FrameworkElement element) => element switch
+    private static Panel? ChildHostOf(FrameworkElement element)
     {
-        Panel panel => panel,
-        ScrollViewer { Content: Panel inner } => inner,
-        _ => null,
-    };
+        // WebView2 缺运行时的降级占位也是 Border，但它的 Child 是提示文字，
+        // 不能让子节点把「加载失败」冲掉。
+        if (element.Tag is "webview2-fallback")
+        {
+            return null;
+        }
+
+        return element switch
+        {
+            Panel panel => panel,
+            ScrollViewer { Content: Panel inner } => inner,
+            // 扩展容器在创建时都预置了一个内层 StackPanel，
+            // 于是这里依旧只返回 Panel，建树/插入/移动三条路径完全不用改。
+            Border { Child: Panel borderInner } => borderInner,
+            Viewbox { Child: Panel viewInner } => viewInner,
+            Expander { Content: Panel expanderInner } => expanderInner,
+            NavigationView { Content: Panel navInner } => navInner,
+            RefreshContainer { Content: Panel refreshInner } => refreshInner,
+            TwoPaneView { Pane1: Panel pane1 } => pane1,
+            _ => null,
+        };
+    }
 
     /// <summary>收集某个节点及其全部子孙的 id。删除时要一起清出节点表。</summary>
     private List<string> CollectSubtree(string rootId)
@@ -504,7 +522,8 @@ internal sealed class FormRenderer
 
         foreach (var name in names)
         {
-            if (nodeId == _rootId && name is "closing" or "sizeChanged")
+            if (nodeId == _rootId && name is
+                "closing" or "sizeChanged" or "windowActivated" or "windowStateChanged")
             {
                 (windowEvents ??= new List<string>()).Add(name);
             }
