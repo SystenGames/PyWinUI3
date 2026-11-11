@@ -4,9 +4,9 @@
     python examples/01_hello.py
 """
 
-import pywinui as ui
+import pywinui3 as ui
 
-win = ui.Window(title="Hello PyWinUI", width=640, height=420)
+win = ui.Window(title="Hello PyWinUI3", width=640, height=420)
 
 col = ui.Column(win, padding=32, spacing=14)
 

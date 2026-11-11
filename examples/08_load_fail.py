@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import time
 
-import pywinui as ui
-from pywinui import protocol
+import pywinui3 as ui
+from pywinui3 import protocol
 
 
 def main() -> None:

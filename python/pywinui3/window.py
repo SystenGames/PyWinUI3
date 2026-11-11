@@ -72,7 +72,7 @@ class Window(Widget):
         self,
         app: App | None = None,
         *,
-        title: str = "PyWinUI",
+        title: str = "PyWinUI3",
         width: int = 800,
         height: int = 600,
         scroll: bool = True,

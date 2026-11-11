@@ -1,6 +1,6 @@
 """宿主端到端冒烟测试。
 
-刻意不 import pywinui：直接按 docs/protocol.md 手写 JSON 与宿主对话。
+刻意不 import pywinui3：直接按 docs/protocol.md 手写 JSON 与宿主对话。
 这样测的是「宿主有没有正确实现协议」，而不是「Python 库能不能自洽」。
 
 用法：
@@ -130,7 +130,7 @@ def build_nodes() -> tuple[str, list[dict]]:
             "children": ["n1", "n2", "n3", "n4", "n7"],
         },
         {"id": "n1", "type": "Label",
-         "props": {"text": "PyWinUI", "fontSize": 34, "weight": "semibold"}},
+         "props": {"text": "PyWinUI3", "fontSize": 34, "weight": "semibold"}},
         {"id": "n2", "type": "Label",
          "props": {"text": "由 Python 描述界面，C# 宿主用 WinUI 3 渲染。",
                    "fontSize": 15, "foreground": "#5A5A5A", "wrap": True}},
@@ -184,7 +184,7 @@ def main() -> int:
         root, nodes = build_nodes()
         host.send({
             "op": "render", "rev": 1,
-            "window": {"title": "PyWinUI 渲染测试", "width": 720, "height": 460,
+            "window": {"title": "PyWinUI3 渲染测试", "width": 720, "height": 460,
                        "center": True, "backdrop": "auto"},
             "root": root,
             "nodes": nodes,
@@ -199,7 +199,7 @@ def main() -> int:
         if windows:
             _hwnd, _visible, title, w, h = windows[0]
             print(f"        title={title!r} size={w}x{h}")
-            check("标题正确", title == "PyWinUI 渲染测试", title)
+            check("标题正确", title == "PyWinUI3 渲染测试", title)
 
         # --- 增量补丁 ---
         print("\n[3] patch")

@@ -1071,3 +1071,55 @@ class Separator(Widget):
 
     def __init__(self, master: Any, **kwargs: Any):
         super().__init__(master, **kwargs)
+
+
+class WebView2(Widget):
+    """WebView2 网页渲染控件。
+
+    依赖系统安装的 **WebView2 Runtime**。宿主在渲染表单时会先探测运行时：
+    没装的话不会白屏、也不会让窗口崩，而是把这个控件换成一块灰色矩形，
+    居中显示「加载失败」，下方写明原因——本控件的方法调用此时是安全的空操作。
+
+    ::
+
+        web = ui.WebView2(root, source="https://www.example.com", height=360)
+        web.navigate("https://www.bing.com")
+        web.reload()
+        web.go_back()
+
+    ``source`` 必须是绝对 URL，``https://`` / ``file:///`` / ``http://localhost``
+    都可以。想强制走降级占位做演示，启动 Python 前设环境变量
+    ``PYWINUI3_WEBVIEW2_FALLBACK=1``。
+
+    已知限制：暂只支持 URL 导航，没有 ``NavigateToString``（本地 HTML 字符串）
+    和导航完成事件；这两者需要等 WebView2 Core 初始化完成，后续再补。
+    """
+
+    _type = "WebView2"
+
+    def __init__(self, master: Any, source: str = "", **kwargs: Any):
+        super().__init__(master, source=source, **kwargs)
+
+    @property
+    def source(self) -> str:
+        return str(self._props.get("source", ""))
+
+    @source.setter
+    def source(self, url: str) -> None:
+        self.configure(source=str(url))
+
+    def navigate(self, url: str) -> None:
+        """导航到绝对 URL，等价于 ``web.source = url``。"""
+        self.source = str(url)
+
+    def reload(self) -> None:
+        """重新加载当前页。"""
+        self._app._send_invoke(self._id, "reload")
+
+    def go_back(self) -> None:
+        """后退。没有历史记录时宿主侧静默跳过。"""
+        self._app._send_invoke(self._id, "go_back")
+
+    def go_forward(self) -> None:
+        """前进。没有可前进的历史时宿主侧静默跳过。"""
+        self._app._send_invoke(self._id, "go_forward")

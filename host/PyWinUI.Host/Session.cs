@@ -243,6 +243,42 @@ internal sealed class Session
 
                     break;
 
+                // WebView2 的导航动作。降级占位是 Border，匹配不上就静默跳过：
+                // 运行时都没装，刷新/后退本来也没有意义。
+                case "navigate":
+                    if (element is WebView2 navigateWeb
+                        && ValueParsers.AsString(invoke.Args?["url"]) is { } url
+                        && Uri.TryCreate(url, UriKind.Absolute, out var target))
+                    {
+                        navigateWeb.Source = target;
+                    }
+
+                    break;
+
+                case "reload":
+                    if (element is WebView2 reloadWeb)
+                    {
+                        reloadWeb.Reload();
+                    }
+
+                    break;
+
+                case "go_back":
+                    if (element is WebView2 backWeb && backWeb.CanGoBack)
+                    {
+                        backWeb.GoBack();
+                    }
+
+                    break;
+
+                case "go_forward":
+                    if (element is WebView2 forwardWeb && forwardWeb.CanGoForward)
+                    {
+                        forwardWeb.GoForward();
+                    }
+
+                    break;
+
                 default:
                     Send(Outbound.Error(
                         "bad-protocol",

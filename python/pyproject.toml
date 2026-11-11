@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pywinui"
+name = "pywinui3"
 version = "0.1.0"
 description = "Tkinter-style Python UI library backed by a real WinUI 3 renderer"
 readme = { text = "用 tkinter 的写法，渲染真正的 WinUI 3 界面。详见仓库根目录 README.md。", content-type = "text/markdown" }
@@ -32,8 +32,8 @@ Issues = "https://github.com/SystenGames/PyWinUI3/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["pywinui*"]
+include = ["pywinui3*"]
 
 [tool.setuptools.package-data]
 # 宿主构建产物随包分发，安装后无需额外构建
-pywinui = ["runtime/**/*"]
+pywinui3 = ["runtime/**/*"]

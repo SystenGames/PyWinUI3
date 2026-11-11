@@ -1,8 +1,8 @@
-"""PyWinUI —— 用 tkinter 的写法，渲染真正的 WinUI 3 界面。
+"""PyWinUI3 —— 用 tkinter 的写法，渲染真正的 WinUI 3 界面。
 
 最小的例子::
 
-    import pywinui as ui
+    import pywinui3 as ui
 
     win = ui.Window(title="Hello", width=640, height=400)
     ui.Label(win, "你好，WinUI 3", font_size=28)
@@ -49,6 +49,7 @@ from .widgets import (
     SplitButton,
     Switch,
     ToggleButton,
+    WebView2,
     Widget,
 )
 from .window import Window
@@ -96,6 +97,7 @@ __all__ = [
     "ListBox",
     "Image",
     "Media",
+    "WebView2",
     "Separator",
     # 变量
     "StringVar",

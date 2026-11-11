@@ -333,6 +333,29 @@ internal sealed class PropertyApplier
                     bar.IsIndeterminate = indeterminate;
                 break;
 
+            // ---------------- WebView2 ----------------
+            case "source":
+                // 降级占位是 Border，不是 WebView2，这里自然跳过：
+                // 缺运行时还去设 Source 只会把占位弄成空白。
+                if (element is WebView2 web && ValueParsers.AsString(value) is { } url)
+                {
+                    if (string.IsNullOrWhiteSpace(url))
+                    {
+                        break;
+                    }
+
+                    if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+                    {
+                        web.Source = uri;
+                    }
+                    else
+                    {
+                        _warn($"WebView2 source 不是绝对 URL: {url}");
+                    }
+                }
+
+                break;
+
             // ---------------- 图片 / 媒体 ----------------
             case "src":
                 if (element is Image image)

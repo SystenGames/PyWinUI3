@@ -25,14 +25,14 @@ HOST_EXE_NAME = "PyWinUI.Host.exe"
 _CLOSED = object()
 
 #: 允许通过环境变量覆盖宿主路径，便于开发时指向自定义构建。
-HOST_PATH_ENV = "PYWINUI_HOST"
+HOST_PATH_ENV = "PYWINUI3_HOST"
 
 
 def locate_host() -> Path:
     """定位宿主可执行文件。
 
     查找顺序：
-      1. 环境变量 ``PYWINUI_HOST``
+      1. 环境变量 ``PYWINUI3_HOST``
       2. 包内自带的 ``runtime/PyWinUI.Host/``（发布形态）
       3. 源码树里 ``host/PyWinUI.Host/bin/**``（开发形态，取最新构建）
     """
@@ -109,12 +109,12 @@ class HostProcess:
             raise HostStartError(f"无法启动宿主进程 {self._exe}: {exc}") from exc
 
         self._reader = threading.Thread(
-            target=self._read_loop, name="pywinui-reader", daemon=True
+            target=self._read_loop, name="pywinui3-reader", daemon=True
         )
         self._reader.start()
 
         self._stderr_reader = threading.Thread(
-            target=self._stderr_loop, name="pywinui-stderr", daemon=True
+            target=self._stderr_loop, name="pywinui3-stderr", daemon=True
         )
         self._stderr_reader.start()
 
@@ -133,9 +133,9 @@ class HostProcess:
                     self._queue.put(decode(text))
                 except Exception:
                     # 单行坏掉不该拖垮整个会话；留痕即可
-                    self._stderr_tail.append(f"[pywinui] 无法解析的行: {text[:500]}")
+                    self._stderr_tail.append(f"[pywinui3] 无法解析的行: {text[:500]}")
         except Exception as exc:  # noqa: BLE001 - 读线程不能让异常逃逸
-            self._stderr_tail.append(f"[pywinui] 读线程异常: {exc}")
+            self._stderr_tail.append(f"[pywinui3] 读线程异常: {exc}")
         finally:
             self._queue.put(_CLOSED)
 

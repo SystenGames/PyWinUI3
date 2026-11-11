@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sys
 
-import pywinui as ui
+import pywinui3 as ui
 
 
 def main() -> None:

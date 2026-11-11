@@ -11,7 +11,7 @@ from __future__ import annotations
 
 
 class PyWinUIError(Exception):
-    """所有 pywinui 异常的基类。"""
+    """所有 pywinui3 异常的基类。"""
 
 
 class ProtocolError(PyWinUIError):

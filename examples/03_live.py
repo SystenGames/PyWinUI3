@@ -13,9 +13,9 @@
 import colorsys
 import time
 
-import pywinui as ui
+import pywinui3 as ui
 
-win = ui.Window(title="PyWinUI 实时渲染", width=780, height=620)
+win = ui.Window(title="PyWinUI3 实时渲染", width=780, height=620)
 
 root = ui.Column(win, padding=28, spacing=14)
 

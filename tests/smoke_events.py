@@ -139,7 +139,7 @@ def main() -> int:
         # 按钮放在客户区左上角，位置可预测，方便算点击坐标
         host.send({
             "op": "render", "rev": 1,
-            "window": {"title": "PyWinUI 事件测试", "width": 480, "height": 320},
+            "window": {"title": "PyWinUI3 事件测试", "width": 480, "height": 320},
             "root": "n0",
             "nodes": [
                 {"id": "n0", "type": "Column", "props": {"padding": 24, "spacing": 16},

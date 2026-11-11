@@ -46,7 +46,7 @@ public sealed class StdioChannel : IDisposable
         _thread = new Thread(ReadLoop)
         {
             IsBackground = true,
-            Name = "pywinui-stdin",
+            Name = "pywinui3-stdin",
         };
         _thread.Start();
     }

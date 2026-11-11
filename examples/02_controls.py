@@ -13,7 +13,7 @@
 
 from pathlib import Path
 
-import pywinui as ui
+import pywinui3 as ui
 
 ASSETS = Path(__file__).parent / "assets"
 
@@ -30,11 +30,11 @@ def report(name: str, action: str, value: object = None) -> None:
 # 窗口
 # ----------------------------------------------------------------------
 
-win = ui.Window(title="PyWinUI 控件总览", width=980, height=900)
+win = ui.Window(title="PyWinUI3 控件总览", width=980, height=900)
 
 root = ui.Column(win, padding=24, spacing=10)
 
-ui.Label(root, "PyWinUI 控件总览", font_size=26, weight="semibold")
+ui.Label(root, "PyWinUI3 控件总览", font_size=26, weight="semibold")
 ui.Label(
     root,
     "操作下面任意控件，都会弹窗显示「哪个控件、什么事件、当前值」。"

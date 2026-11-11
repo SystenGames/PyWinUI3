@@ -103,6 +103,9 @@ internal static class NodeFactory
                 // 自带虚拟化和 Fluent 样式
                 return new ListView();
 
+            case "WebView2":
+                return CreateWebView2(nodeId, warn);
+
             case "Image":
                 return new Image();
 
@@ -117,6 +120,89 @@ internal static class NodeFactory
 
     private static bool IsTrue(JsonNode? node) =>
         node is JsonValue value && value.TryGetValue<bool>(out var flag) && flag;
+
+    /// <summary>
+    /// WebView2：运行时缺失时换成灰色降级占位，绝不把控件交去初始化。
+    ///
+    /// 探测结果在 <see cref="WebView2Runtime"/> 里缓存，多个 WebView2 节点只查一次。
+    /// </summary>
+    private static FrameworkElement CreateWebView2(string nodeId, Action<string> warn)
+    {
+        if (!WebView2Runtime.IsAvailable)
+        {
+            warn($"节点 {nodeId}: 未找到 WebView2 Runtime，已显示降级占位");
+            return CreateWebView2Fallback();
+        }
+
+        return new WebView2
+        {
+            // 不给默认 Source：没指定就保持空白，由 Python 侧随后 set / navigate 决定
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
+        };
+    }
+
+    /// <summary>
+    /// 缺运行时的灰色矩形：中间是居中的「加载失败」小页面，下方是具体原因。
+    ///
+    /// 外层刻意用 Border 而不是 Panel：FormRenderer 的 ChildHostOf 只认
+    /// Panel / ScrollViewer，这样即使协议给这个节点带了 children，也不会把
+    /// 子节点插进降级页把提示冲掉，而是老老实实回一条「不是容器」的协议错误。
+    /// </summary>
+    private static FrameworkElement CreateWebView2Fallback()
+    {
+        var white = new SolidColorBrush(Colors.White);
+        var softWhite = new SolidColorBrush(Color.FromArgb(220, 255, 255, 255));
+
+        var icon = new FontIcon
+        {
+            Glyph = "\uE783",
+            FontSize = 40,
+            Foreground = white,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+
+        var title = new TextBlock
+        {
+            Text = "加载失败",
+            FontSize = 16,
+            Foreground = white,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+
+        var detail = new TextBlock
+        {
+            Text = "该控件无法正常加载：Webview2 Runtime未找到。",
+            FontSize = 12,
+            Foreground = softWhite,
+            TextWrapping = TextWrapping.Wrap,
+            TextAlignment = TextAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            MaxWidth = 320,
+        };
+
+        var stack = new StackPanel
+        {
+            Orientation = Orientation.Vertical,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Spacing = 10,
+        };
+        stack.Children.Add(icon);
+        stack.Children.Add(title);
+        stack.Children.Add(detail);
+
+        return new Border
+        {
+            Background = new SolidColorBrush(Color.FromArgb(255, 0x76, 0x76, 0x76)),
+            Child = stack,
+            MinWidth = 260,
+            MinHeight = 160,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            Tag = "webview2-fallback",
+        };
+    }
 
     /// <summary>分隔线：1 像素高的横条，随容器拉伸。</summary>
     private static FrameworkElement CreateSeparator() => new Border

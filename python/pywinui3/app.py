@@ -252,7 +252,7 @@ class App:
             except Exception:  # noqa: BLE001
                 traceback.print_exc()
         else:
-            print(f"[pywinui] {error}", file=sys.stderr)
+            print(f"[pywinui3] {error}", file=sys.stderr)
 
     # ------------------------------------------------------------------
     # 定时器

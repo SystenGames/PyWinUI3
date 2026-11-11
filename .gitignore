@@ -18,7 +18,7 @@ build/
 
 # ---- 构建产物 ----
 # 宿主编译结果随 wheel 分发，但不进版本库
-python/pywinui/runtime/
+python/pywinui3/runtime/
 
 # ---- 其他 ----
 .DS_Store

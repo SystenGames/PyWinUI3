@@ -5,7 +5,7 @@
 用 tkinter 的写法，渲染真正的 WinUI 3 界面。
 
 ```python
-import pywinui as ui
+import pywinui3 as ui
 
 win = ui.Window(title="Hello", width=640, height=400)
 ui.Label(win, "你好，WinUI 3", font_size=28)
@@ -100,10 +100,10 @@ TCP 会占端口还可能被防火墙拦。stdin/stdout 零依赖，而且句柄
 ```
 host/PyWinUI.Host/        C# WinUI 3 渲染宿主
   Protocol/               消息 DTO 与解析
-  Transport/              stdin/stdout 行分帧（待实现）
-  Rendering/              控件工厂、属性映射、增量应用（待实现）
-  Interop/                事件回传（待实现）
-python/pywinui/           Python 库
+  Transport/              stdin/stdout 行分帧
+  Rendering/              控件工厂、属性映射、增量应用
+  Interop/                事件回传
+python/pywinui3/           Python 库
   protocol.py             协议编解码
   transport.py            宿主进程与管道
   app.py                  生命周期与事件循环
@@ -123,7 +123,7 @@ dotnet build host/PyWinUI.Host/PyWinUI.Host.csproj -c Release
 ```
 
 输出目录里的 `PyWinUI.Host.exe` 就是渲染宿主。Python 侧会自动在源码树里找它，
-也可以用环境变量 `PYWINUI_HOST` 直接指定路径。
+也可以用环境变量 `PYWINUI3_HOST` 直接指定路径。
 
 > **不要删 `App.xaml`。** 它看起来只是放资源，实际上 XAML 编译器靠它生成
 > `IXamlMetadataProvider` 和 `XamlTypeInfo`。少了它，`XamlControlsResources`
@@ -134,7 +134,8 @@ dotnet build host/PyWinUI.Host/PyWinUI.Host.csproj -c Release
 所以产物是免安装的裸 exe（约 138MB，含完整 WinAppSDK 运行时），
 不需要目标机器预装 Windows App Runtime。
 
-Python 包本身没有第三方依赖：
+Python 包本身没有第三方依赖。包名是 **`pywinui3`**（带 3，用来和另一个同名项目区分），
+导入写作 `import pywinui3 as ui`：
 
 ```powershell
 pip install -e python
@@ -159,7 +160,7 @@ pip install -e python
 
 `Label` `Button` `HyperlinkButton` `ToggleButton` `SplitButton` `RepeatButton`
 `Entry` `Checkbox` `Radio` `Switch`
-`Slider` `ProgressBar` `ProgressRing` `ComboBox` `ListBox` `Image` `Media` `Separator`
+`Slider` `ProgressBar` `ProgressRing` `ComboBox` `ListBox` `Image` `Media` `WebView2` `Separator`
 
 **进度指示**
 
@@ -192,6 +193,26 @@ player.bind("mediaFailed", lambda e: print("失败", e.data["error"]))
 
 本地路径和 http(s) URL 都支持。`show_controls=True`（默认）用系统自带的
 播放/暂停/进度条；关掉就可以用自己的按钮通过 `play()` / `pause()` 控制。
+
+**网页视图（WebView2）**
+
+```python
+web = ui.WebView2(col, source="https://www.example.com", height=360)
+web.navigate("https://www.bing.com")   # 等价于 web.source = "..."
+web.reload()
+web.go_back()
+web.go_forward()
+```
+
+控件由 WinUI 3 的 `WebView2` 承载，背后是系统安装的 Edge WebView2 Runtime；
+本项目**不打包、也不会替你安装**运行时。宿主在窗口启动时探测：
+
+- 装了 → 正常渲染网页，支持 `https://` / `file:///` / `http://localhost`；
+- 没装 → 该控件自动换成灰色矩形，居中显示「加载失败」，下方一行
+  `该控件无法正常加载：Webview2 Runtime未找到。` 其余界面照常工作，不白屏、不崩溃。
+
+不想卸载运行时也能验证降级：启动前设 `PYWINUI3_WEBVIEW2_FALLBACK=1`，
+或直接跑 `examples/09_webview2.py`。探测规则见 [docs/protocol.md](docs/protocol.md) 3.5.3。
 
 **按钮外观**
 
@@ -404,6 +425,7 @@ ui.dialog("控件事件", "Button 被点击了")
 | `examples/06_buttons.py` | ToggleButton / SplitButton / RepeatButton |
 | `examples/07_sidebar.py` | Grid 布局 + 可折叠 ListBox 侧边栏（20 步宽度动画） |
 | `examples/08_load_fail.py` | 加载 → 失败：加载圈 0.5 秒保底 + 失败错误界面 |
+| `examples/09_webview2.py` | WebView2 网页视图 + 缺运行时时的灰色降级页 |
 
 `02_controls.py` 是用来肉眼验收的——不用读日志就能确认每种控件和每种事件都通了。
 `03_live.py` 用来确认「实时」这件事：全程没有手动刷新调用。
@@ -423,6 +445,8 @@ ui.dialog("控件事件", "Button 被点击了")
 - **关闭事件不可取消**。`closing` 只是通知，拦不住关窗；需要「确认退出」请在界面里做。
 - **启动至少 0.5 秒**。加载圈有保底显示时间，否则在快机器上只闪一两帧，看起来像界面抖了一下。
 - **回调在主线程执行**。回调里阻塞会卡住整个 UI，和 tkinter 行为一致。
+- **WebView2 依赖系统运行时**。只覆盖「运行时没装」这一种失败：运行时存在但初始化
+  失败（安装损坏）时该区域仍可能空白；也暂不支持本地 HTML 字符串和导航完成事件。
 
 ---
 

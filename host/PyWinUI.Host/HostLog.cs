@@ -17,7 +17,7 @@ internal static class HostLog
 
     /// <summary>日志落盘位置。放在 TEMP 下，避免污染程序目录。</summary>
     public static string FilePath { get; } =
-        Path.Combine(Path.GetTempPath(), "pywinui-host.log");
+        Path.Combine(Path.GetTempPath(), "pywinui3-host.log");
 
     private static bool _initialized;
 

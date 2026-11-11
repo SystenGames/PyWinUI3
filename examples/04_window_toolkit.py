@@ -20,7 +20,7 @@ import sys
 import tempfile
 import zlib
 
-import pywinui as ui
+import pywinui3 as ui
 
 
 def _png(width: int, height: int) -> bytes:
@@ -59,12 +59,12 @@ def _ico(png: bytes, size: int = 32) -> bytes:
 
 
 def main() -> None:
-    icon_path = os.path.join(tempfile.gettempdir(), "pywinui-demo.ico")
+    icon_path = os.path.join(tempfile.gettempdir(), "pywinui3-demo.ico")
     with open(icon_path, "wb") as handle:
         handle.write(_ico(_png(32, 32)))
 
     win = ui.Window(
-        title="PyWinUI 能力演示",
+        title="PyWinUI3 能力演示",
         width=780,
         height=660,
         x=140,

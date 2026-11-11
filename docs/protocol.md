@@ -1,4 +1,4 @@
-# PyWinUI 协议定义
+# PyWinUI3 协议定义
 
 版本：`1`
 
@@ -71,7 +71,7 @@ Python                          Host
 #### `hello` — 握手
 
 ```json
-{ "op": "hello", "protocol": 1, "client": "pywinui/0.1.0", "pid": 12345 }
+{ "op": "hello", "protocol": 1, "client": "pywinui3/0.1.0", "pid": 12345 }
 ```
 
 | 字段         | 类型     | 必填 | 说明                     |
@@ -152,7 +152,8 @@ Python                          Host
 ```
 
 支持：`focus`、`select_all`、`scroll_to`（`args: {"index": 0}`）、
-`play` / `pause` / `stop` / `seek`（仅 `Media`，`seek` 用 `args: {"seconds": 12.5}`）。
+`play` / `pause` / `stop` / `seek`（仅 `Media`，`seek` 用 `args: {"seconds": 12.5}`）、
+`navigate`（仅 `WebView2`，`args: {"url": "https://..."}`）/ `reload` / `go_back` / `go_forward`。
 
 #### `dialog` — 弹出模态对话框
 
@@ -251,7 +252,7 @@ Python 侧据此抑制双向绑定回环。
 
 | 字段          | 类型     | 默认          | 说明                                   |
 | ----------- | ------ | ----------- | ------------------------------------ |
-| `title`     | string | `"PyWinUI"` | 窗口标题                                 |
+| `title`     | string | `"PyWinUI3"` | 窗口标题                                 |
 | `width`     | number | 800         | 逻辑像素                                 |
 | `height`    | number | 600         | 逻辑像素                                 |
 | `minWidth`  | number | 320         |                                      |
@@ -319,6 +320,7 @@ Python 侧据此抑制双向绑定回环。
 | `ListBox`         | `ListView`                   | 否      |
 | `Image`           | `Image`                      | 否      |
 | `Media`           | `MediaPlayerElement`         | 否      |
+| `WebView2`        | `WebView2`；缺运行时时降级成灰色 `Border`，见 3.5.3 | 否      |
 | `Separator`       | `Border`（1px 线）              | 否      |
 
 未知 `type` 不崩溃：回一条 `error`，该节点渲染成占位 `TextBlock` 显示 `[未知控件: Foo]`。
@@ -380,6 +382,7 @@ Python 侧据此抑制双向绑定回环。
 | `ComboBox`       | `items`(见 3.5.1), `selectedIndex`(number), `placeholder`                                          |
 | `ListBox`        | `items`(见 3.5.1), `selectedIndex`(number)                                                         |
 | `Image`          | `src`(路径 / URL / data URI), `stretch`(`fill`/`uniform`/`uniformToFill`/`none`)                      |
+| `WebView2`       | `source`(绝对 URL)；缺运行时时静默忽略，见 3.5.3                                                             |
 | `Separator`      | `color`, `thickness`                                                                              |
 
 #### 3.5.1 `items` 的两种形态
@@ -445,6 +448,36 @@ Python 侧据此抑制双向绑定回环。
 
 `Image` 的 `src` 除路径与 URL 外还支持 `data:image/png;base64,...`；
 真正开始解码前不会阻塞 UI，解码失败回 `imageFailed`。
+
+#### 3.5.3 `WebView2` 的运行时降级
+
+宿主在**创建节点时**（`render` / `insert` 的建树阶段）探测 WebView2 Runtime，
+也就是窗口启动这一刻，而不是等控件自己去初始化炸掉：
+
+```
+探测 = 注册表 EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5} 的 pv
+       （HKLM / HKCU × 32 / 64 视图，Evergreen 安装）
+    ∨  EdgeWebView\Application\<版本>\msedgewebview2.exe 存在
+       （固定版本 Fixed Version 运行时，不写注册表）
+```
+
+探测结果在整个宿主进程里缓存；设环境变量 `PYWINUI3_WEBVIEW2_FALLBACK=1`
+可强制判为「缺失」，用于演示和自动化验证。
+
+- **探测到运行时** → 建 `WebView2` 控件，`source` 写进 `WebView2.Source`。
+- **没探测到运行时** → 不建控件，换成一块灰色 `Border`：居中是「加载失败」
+  图标和标题，下方一行 `该控件无法正常加载：Webview2 Runtime未找到。`，
+  同时回一条 `warn`。节点本身仍是合法节点，`source` 被静默忽略，
+  `navigate` / `reload` / `go_back` / `go_forward` 因类型不匹配静默跳过；
+  窗口其余部分照常渲染，不会白屏、不会崩溃。
+
+降级占位用 `Border` 而不是 `Panel`，所以它**不是容器**：给它塞 `children`
+会收到 `bad-protocol`「不是容器」错误，而不是把提示文字冲掉。
+
+边界：本节只覆盖「运行时根本没装」。运行时存在但初始化失败（安装损坏、
+权限问题）目前只在日志里留下 WebView2 的异常，该区域显示为空白，
+暂不自动替换成降级页。`WebView2` 也暂不提供导航完成事件与
+`NavigateToString`（本地 HTML 字符串）。
 
 ### 3.6 值类型约定
 
@@ -544,7 +577,7 @@ win.mainloop()
 对应线上流量：
 
 ```
-→ {"op":"hello","protocol":1,"client":"pywinui/0.1.0","pid":8123}
+→ {"op":"hello","protocol":1,"client":"pywinui3/0.1.0","pid":8123}
 ← {"t":"ready","protocol":1,"host":"PyWinUI.Host/0.1.0","os":{"version":"10.0.19044","build":19044},"capabilities":{"mica":false,"acrylic":true,"roundedCorners":false,"backdrop":"acrylic"}}
 → {"op":"render","rev":1,"window":{"title":"Demo","width":640,"height":480,"backdrop":"auto"},"root":"n0","nodes":[{"id":"n0","type":"Column","props":{"padding":24,"spacing":12},"children":["n1","n2"]},{"id":"n1","type":"Label","props":{"text":"你好","fontSize":28}},{"id":"n2","type":"Button","props":{"text":"点我"},"events":{"click":"h1"}}]}
 ← {"t":"ack","rev":1}

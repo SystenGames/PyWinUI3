@@ -14,8 +14,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
-from pywinui import protocol  # noqa: E402
-from pywinui.errors import ProtocolError  # noqa: E402
+from pywinui3 import protocol  # noqa: E402
+from pywinui3.errors import ProtocolError  # noqa: E402
 
 
 class TestEncode(unittest.TestCase):
@@ -75,7 +75,7 @@ class TestMessages(unittest.TestCase):
         self.assertEqual(msg["op"], "hello")
         self.assertEqual(msg["protocol"], protocol.PROTOCOL_VERSION)
         self.assertEqual(msg["pid"], 1234)
-        self.assertIn("pywinui", msg["client"])
+        self.assertIn("pywinui3", msg["client"])
 
     def test_render(self):
         node = protocol.node("n1", "Label", {"text": "hi"})
